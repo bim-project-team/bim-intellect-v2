@@ -12,11 +12,13 @@ import ifcopenshell.geom
 import ifcopenshell.util.element as element_util
 from tqdm import tqdm
 
+
 # The types we care about for the MVP graph
 ELEMENT_TYPES = [
     "IfcStair", "IfcStairFlight", "IfcTransportElement",
     "IfcDoor", "IfcWall", "IfcSpace", "IfcSlab", "IfcColumn"
 ]
+
 
 def _make_settings():
     settings = ifcopenshell.geom.settings()
@@ -24,6 +26,7 @@ def _make_settings():
     settings.set(settings.DISABLE_OPENING_SUBTRACTIONS, True)
     settings.set(settings.APPLY_DEFAULT_MATERIALS, False)
     return settings
+
 
 def extract_all_geometry(model):
     """Bulk-extract bounding boxes using parallel iterator (Kiarash's optimization)"""
@@ -48,6 +51,7 @@ def extract_all_geometry(model):
                 break
         pbar.close()
     return bbox_map
+
 
 def extract_graph(ifc_path, nodes_csv="nodes.csv", edges_csv="edges.csv"):
     print(f"Loading model from {ifc_path}...", file=sys.stderr, flush=True)
@@ -86,7 +90,6 @@ def extract_graph(ifc_path, nodes_csv="nodes.csv", edges_csv="edges.csv"):
             
             # 2. Edge Data (Relationships)
             # Find what this element aggregates/contains/bounds
-            # (Matches Dariush's relationship scheme)
             if hasattr(elem, "IsDecomposedBy"):
                 for rel in elem.IsDecomposedBy:
                     for related in rel.RelatedObjects:
@@ -117,6 +120,11 @@ def extract_graph(ifc_path, nodes_csv="nodes.csv", edges_csv="edges.csv"):
         writer.writerows(edges_data)
 
     print("Done! Ready for load_to_neo4j.py", file=sys.stderr)
+
+
+# ALIAS ADDED HERE: Route fix for api/routes.py
+run_extraction = extract_graph
+
 
 if __name__ == "__main__":
     import sys
