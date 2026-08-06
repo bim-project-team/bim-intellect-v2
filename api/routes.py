@@ -44,12 +44,6 @@ class QuestionRequest(BaseModel):
 
 # ------------------------------------------------------------------
 # RAG module discovery
-#
-# The rag/ package uses absolute intra-package imports (e.g.
-# "from chunker import ..." instead of "from rag.chunker import ...").
-# Those only resolve when rag/ itself is on sys.path. We add it
-# dynamically here so the API can import them regardless of how the
-# server was launched.
 # ------------------------------------------------------------------
 
 _RAG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rag")
@@ -114,7 +108,7 @@ def _ensure_rag():
 
 
 # ------------------------------------------------------------------
-# IFC / Graph pipeline routes (unchanged)
+# IFC / Graph pipeline routes
 # ------------------------------------------------------------------
 
 @router.post("/extract")
@@ -123,12 +117,6 @@ def extract_ifc(
     storey: Optional[List[str]] = Query(None, description="Repeatable: storey name(s) to include"),
     type: Optional[List[str]] = Query(None, description="Repeatable: IFC type(s) to include"),
 ):
-    """
-    Parse an IFC file (optionally scoped to specific storeys/types) into
-    nodes.csv/edges.csv. Does NOT touch Neo4j - call /load separately
-    (possibly multiple times, e.g. after a --reset) without re-parsing the
-    IFC file each time.
-    """
     if not os.path.exists(ifc_path):
         raise HTTPException(404, f"IFC file not found: {ifc_path}")
 
@@ -153,11 +141,6 @@ def extract_ifc(
 def load_into_neo4j(
     reset: bool = Query(False, description="Wipe the graph before loading"),
 ):
-    """
-    Bulk-load the current nodes.csv/edges.csv (from /extract) into Neo4j.
-    Safe to call repeatedly against the same CSVs - node/edge writes are
-    idempotent (MERGE-based), and --reset gives a clean slate on demand.
-    """
     if not os.path.exists(NODES_CSV) or not os.path.exists(EDGES_CSV):
         raise HTTPException(
             409, f"{NODES_CSV}/{EDGES_CSV} not found - call /extract first."
@@ -172,11 +155,6 @@ def ingest_ifc(
     type: Optional[List[str]] = Query(None, description="Repeatable: IFC type(s) to include"),
     reset: bool = Query(False, description="Wipe the graph before loading"),
 ):
-    """
-    Convenience wrapper: /extract followed by /load in one call. For
-    iterating on the same IFC file/filter without re-parsing each time,
-    call /extract once and /load as many times as you need instead.
-    """
     if not os.path.exists(ifc_path):
         raise HTTPException(404, f"IFC file not found: {ifc_path}")
 
@@ -199,16 +177,11 @@ def ingest_ifc(
 
 @router.post("/analyze")
 def analyze():
-    """
-    Run AABB clash + clearance detection against whatever is currently
-    loaded in Neo4j (call /ingest first), and persist results back as
-    :CLASHES_WITH relationships.
-    """
     summary = clash_pipeline.run_clash_detection()
     return summary
 
 
-@router.get("/api/filters/storeys")
+@router.get("/filters/storeys")
 def get_available_storeys():
     """Dynamically searches the IFC graph for available storeys."""
     try:
@@ -224,7 +197,7 @@ def get_available_storeys():
     except Exception as e:
         return {"storeys": [], "error": str(e)}
 
-@router.get("/api/clashes")
+@router.get("/clashes")
 def get_clashes_filtered(storey: Optional[str] = None, types: Optional[str] = None):
     try:
         with Neo4jClient() as client:
@@ -252,7 +225,7 @@ def get_clashes_filtered(storey: Optional[str] = None, types: Optional[str] = No
     except Exception as e:
         return []
 
-@router.get("/api/violations")
+@router.get("/violations")
 def get_violations_filtered(storey: Optional[str] = None, types: Optional[str] = None):
     try:
         with Neo4jClient() as client:
@@ -280,7 +253,7 @@ def get_violations_filtered(storey: Optional[str] = None, types: Optional[str] =
     except Exception as e:
         return []
 
-@router.get("/api/issues")
+@router.get("/issues")
 def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = None):
     try:
         with Neo4jClient() as client:
@@ -308,24 +281,6 @@ def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = Non
     except Exception as e:
         return []
 
-@router.get("/clashes")
-def get_clashes():
-    """Hard clashes: overlapping bounding boxes."""
-    rows = clash_pipeline.list_issues(issue="CLASH")
-    return [dict(r) for r in rows]
-
-@router.get("/violations")
-def get_violations():
-    """Clearance violations: elements closer than the minimum allowed gap."""
-    rows = clash_pipeline.list_issues(issue="CLEARANCE_VIOLATION")
-    return [dict(r) for r in rows]
-
-@router.get("/issues")
-def get_all_issues():
-    """Both clashes and clearance violations together."""
-    rows = clash_pipeline.list_issues(issue=None)
-    return [dict(r) for r in rows]
-
 
 # ------------------------------------------------------------------
 # RAG corpus management: upload / ingest / status / clear
@@ -336,11 +291,6 @@ def upload_pdf(
     file: UploadFile = File(..., description="PDF file to chunk, embed, and store in ChromaDB"),
     doc_id: Optional[str] = Query(None, description="Document ID prefix for chunk IDs (defaults to filename stem)"),
 ):
-    """
-    Upload a PDF via multipart/form-data, extract text chunks, generate
-    embeddings via OpenRouter, and store them in the local ChromaDB
-    collection. Safe to call multiple times - new chunks are additive.
-    """
     _ensure_rag()
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -386,10 +336,6 @@ def ingest_pdf_from_path(
     pdf_path: str = Query(..., description="Absolute or relative path to an existing PDF file"),
     doc_id: Optional[str] = Query(None, description="Document ID prefix for chunk IDs (defaults to filename stem)"),
 ):
-    """
-    Ingest a PDF already on disk into ChromaDB. Same pipeline as
-    /rag/upload but reads from a path instead of an HTTP upload.
-    """
     _ensure_rag()
 
     if not os.path.exists(pdf_path):
@@ -425,7 +371,6 @@ def ingest_pdf_from_path(
 
 @router.get("/rag/status")
 def rag_status():
-    """Return ChromaDB collection stats: document count, storage path, sample IDs."""
     _ensure_rag()
 
     try:
@@ -447,7 +392,6 @@ def rag_status():
 
 @router.delete("/rag/clear")
 def rag_clear_collection():
-    """Delete the entire ChromaDB collection. Use with caution."""
     _ensure_rag()
 
     try:
@@ -467,12 +411,6 @@ def rag_clear_collection():
 
 @router.post("/ask")
 def ask(req: QuestionRequest):
-    """
-    Unified RAG endpoint. Automatically routes the question to:
-    - Vector DB (Mabhas 15 regulations) if codes/laws are needed
-    - Neo4j Graph (BIM elements & clashes) if building data is needed
-    - Both if needed, combining into a single synthesized answer with citations.
-    """
     _ensure_rag()
 
     orchestrator = _RAG_ORCHESTRATOR()
@@ -486,10 +424,6 @@ def ask(req: QuestionRequest):
 
 @router.post("/ask-vector")
 def ask_vector_only(req: QuestionRequest):
-    """
-    Debug endpoint: regulation vector search only (legacy retriever).
-    Uses the same pipeline as before the graph integration.
-    """
     _ensure_rag()
 
     try:
@@ -500,7 +434,6 @@ def ask_vector_only(req: QuestionRequest):
 
 @router.post("/ask-graph")
 def ask_graph_only(req: QuestionRequest):
-    """Debug endpoint: Neo4j graph query only."""
     try:
         from bim_graph.graph_retriever import GraphRetriever
     except ImportError as exc:
@@ -517,7 +450,7 @@ def ask_graph_only(req: QuestionRequest):
 # System Health Check
 # ------------------------------------------------------------------
 
-@router.get("/api/health")
+@router.get("/health")
 def health_check():
     """
     Check the health of the API and its dependencies (Neo4j, ChromaDB).
