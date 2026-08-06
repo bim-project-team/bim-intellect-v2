@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Generated Graph Data
+nodes.csv
+edges.csv
+
+# IFC models and large datasets
+dataset/*.ifc
+dataset/*.zip
+
+# ChromaDB
+chroma_db/
+
+# OS specific
+.DS_Store
