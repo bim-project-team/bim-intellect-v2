@@ -517,16 +517,25 @@ function formatAnalyzeSummary(data) {
 // HTTP helpers
 // ------------------------------------------------------------------
 
+// Original function logic restored for old text inputs
+function csvToRepeatedParams(paramName, rawValue, searchParams) {
+  if (!rawValue) return;
+  rawValue
+    .split(";")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .forEach((v) => searchParams.append(paramName, v));
+}
+
+// Kept this for the Results Dropdowns which we are retaining
 function addRepeatedParams(paramName, rawValue, searchParams) {
   if (!rawValue) return;
   
-  // If it's an array (from a multiple select)
   if (Array.isArray(rawValue)) {
       rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
       return;
   }
   
-  // If it's a string (e.g. from the old comma separated input fallback)
   rawValue
     .split(",")
     .map((v) => v.trim())
@@ -576,12 +585,9 @@ ingestForm.addEventListener("submit", async (e) => {
     const url = new URL("/api/ingest", window.location.origin);
     url.searchParams.set("ifc_path", fd.get("ifc_path"));
     
-    // Grab multiple selections from the selects
-    const storeys = Array.from(document.getElementById('ingestStoreyFilter').selectedOptions).map(o => o.value);
-    const types = Array.from(document.getElementById('ingestTypeFilter').selectedOptions).map(o => o.value);
-    
-    addRepeatedParams("storey", storeys, url.searchParams);
-    addRepeatedParams("type", types, url.searchParams);
+    // Original semicolon-separated string extraction restored
+    csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
+    csvToRepeatedParams("type", fd.get("type"), url.searchParams);
     
     url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
 
@@ -665,17 +671,15 @@ function renderRows(rows) {
 // ------------------------------------------------------------------
 loadCorpusStatus();
 
-// Fetch storeys from Neo4j when the page loads
+// Fetch storeys from Neo4j when the page loads (for results table only)
 async function loadStoreys() {
     try {
         const response = await fetch('/api/filters/storeys');
         const data = await response.json();
         
         const resultStoreySelect = document.getElementById('storeyFilter');
-        const ingestStoreySelect = document.getElementById('ingestStoreyFilter');
         
         if (resultStoreySelect) resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
-        if (ingestStoreySelect) ingestStoreySelect.innerHTML = '<option value="">All Storeys (Leave empty)</option>';
         
         if (data.storeys) {
             data.storeys.forEach(storey => {
@@ -684,13 +688,6 @@ async function loadStoreys() {
                     opt1.value = storey;
                     opt1.textContent = storey;
                     resultStoreySelect.appendChild(opt1);
-                }
-                
-                if (ingestStoreySelect) {
-                    const opt2 = document.createElement('option');
-                    opt2.value = storey;
-                    opt2.textContent = storey;
-                    ingestStoreySelect.appendChild(opt2);
                 }
             });
         }
