@@ -28,6 +28,8 @@ from typing import List, Optional
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from bim_graph.neo4j_client import Neo4jClient
+
 from bim_graph.config import NODES_CSV, EDGES_CSV, DEFAULT_IFC_PATH
 from bim_graph import load_to_neo4j, clash_pipeline
 from extract_graph import run_extraction
@@ -218,7 +220,22 @@ def get_violations():
     rows = clash_pipeline.list_issues(issue="CLEARANCE_VIOLATION")
     return [dict(r) for r in rows]
 
-
+@router.get("/filters/storeys")
+def get_available_storeys():
+    """Dynamically searches the IFC graph for available storeys."""
+    try:
+        with Neo4jClient() as client:
+            query = """
+            MATCH (n) 
+            WHERE n.storey_name IS NOT NULL AND n.storey_name <> "" 
+            RETURN DISTINCT n.storey_name AS storey
+            ORDER BY storey
+            """
+            records = client.run(query)
+            return {"storeys": [r["storey"] for r in records]}
+    except Exception as e:
+        return {"storeys": [], "error": str(e)}
+    
 @router.get("/issues")
 def get_all_issues():
     """Both clashes and clearance violations together."""

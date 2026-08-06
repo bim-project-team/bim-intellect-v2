@@ -633,3 +633,43 @@ function renderRows(rows) {
 // Init
 // ------------------------------------------------------------------
 loadCorpusStatus();
+
+// Fetch storeys from Neo4j when the page loads
+async function loadStoreys() {
+    try {
+        const response = await fetch('/filters/storeys');
+        const data = await response.json();
+        
+        const storeySelect = document.getElementById('storeyFilter');
+        storeySelect.innerHTML = '<option value="">All Storeys</option>'; // Reset
+        
+        if (data.storeys) {
+            data.storeys.forEach(storey => {
+                const opt = document.createElement('option');
+                opt.value = storey;
+                opt.textContent = storey;
+                storeySelect.appendChild(opt);
+            });
+        }
+    } catch (error) {
+        console.error("Failed to load storeys:", error);
+    }
+}
+
+// Handle clicking "Apply Filters"
+document.getElementById('applyFiltersBtn').addEventListener('click', () => {
+    // 1. Get selected storey
+    const selectedStorey = document.getElementById('storeyFilter').value;
+    
+    // 2. Get all selected types from the multi-select
+    const typeSelect = document.getElementById('typeFilter');
+    const selectedTypes = Array.from(typeSelect.selectedOptions).map(opt => opt.value);
+    
+    console.log("Filters Applied:", { storey: selectedStorey, types: selectedTypes });
+    
+    // TODO: Pass these values to your existing Results Table rendering logic,
+    // or send them in your next API call to filter the backend!
+});
+
+// Run this when the script loads
+loadStoreys();
