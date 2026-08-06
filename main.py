@@ -16,16 +16,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Mount our API routes — note: we no longer hard-prefix "/api" here 
-# because routes.py defines endpoints as "/api/...", "/rag/...", etc.
+# Mount our API routes WITHOUT a prefix, so routes.py handles the paths directly
 app.include_router(api_router)
+
+# Mount frontend
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 def serve_frontend():
-    return FileResponse("static/index.html")
+    # If the user's index.html is actually called app.html or similar in their static folder,
+    # or if we should redirect to static/index.html instead of FileResponse
+    # Let's check for standard paths.
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    # fallback to just serving text if missing so the backend still boots
+    return {"message": "BIM-Intellect Backend is running. Frontend missing from static/index.html"}
 
 if __name__ == "__main__":
     import uvicorn
