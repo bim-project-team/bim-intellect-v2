@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from bim_graph.neo4j_client import Neo4jClient
@@ -207,7 +208,7 @@ def analyze():
     return summary
 
 
-@router.get("/filters/storeys")
+@router.get("/api/filters/storeys")
 def get_available_storeys():
     """Dynamically searches the IFC graph for available storeys."""
     try:
@@ -510,3 +511,51 @@ def ask_graph_only(req: QuestionRequest):
         return gr.ask(req.question)
     except Exception as exc:
         raise HTTPException(500, f"Graph query error: {exc}")
+
+
+# ------------------------------------------------------------------
+# System Health Check
+# ------------------------------------------------------------------
+
+@router.get("/api/health")
+def health_check():
+    """
+    Check the health of the API and its dependencies (Neo4j, ChromaDB).
+    Returns 200 if all is well, 503 if a dependency is unreachable.
+    """
+    healthy = True
+    checks = {}
+
+    # 1. Check Neo4j
+    try:
+        with Neo4jClient() as client:
+            client.run("RETURN 1")
+        checks["neo4j"] = {"status": "ok"}
+    except Exception as e:
+        checks["neo4j"] = {"status": "error", "detail": "Neo4j connection failed"}
+        healthy = False
+
+    # 2. Check ChromaDB
+    try:
+        _ensure_rag()
+        client = _RAG_EMBEDDER["get_client_db"]()
+        collection = _RAG_EMBEDDER["get_or_create_collection"](client)
+        count = collection.count()
+        checks["chroma"] = {
+            "status": "ok",
+            "document_count": count,
+            "collection": _RAG_EMBEDDER["COLLECTION_NAME"]
+        }
+    except Exception as e:
+        checks["chroma"] = {"status": "error", "detail": "ChromaDB connection failed"}
+        healthy = False
+
+    status_code = 200 if healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "healthy" if healthy else "unhealthy",
+            "service": "bim-intellect",
+            "checks": checks
+        }
+    )
