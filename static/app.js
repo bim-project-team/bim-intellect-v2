@@ -514,13 +514,21 @@ function formatAnalyzeSummary(data) {
 }
 
 // ------------------------------------------------------------------
-// HTTP helpers (unchanged)
+// HTTP helpers
 // ------------------------------------------------------------------
 
-function csvToRepeatedParams(paramName, rawValue, searchParams) {
+function addRepeatedParams(paramName, rawValue, searchParams) {
   if (!rawValue) return;
+  
+  // If it's an array (from a multiple select)
+  if (Array.isArray(rawValue)) {
+      rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
+      return;
+  }
+  
+  // If it's a string (e.g. from the old comma separated input fallback)
   rawValue
-    .split(";")
+    .split(",")
     .map((v) => v.trim())
     .filter(Boolean)
     .forEach((v) => searchParams.append(paramName, v));
@@ -531,7 +539,11 @@ async function postJSON(path, params) {
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       if (value === undefined || value === null || value === "") return;
-      url.searchParams.set(key, value);
+      if (Array.isArray(value)) {
+          value.forEach(v => url.searchParams.append(key, v));
+      } else {
+          url.searchParams.set(key, value);
+      }
     });
   }
   const response = await fetch(url, { method: "POST" });
@@ -552,7 +564,7 @@ async function getJSON(path) {
 }
 
 // ------------------------------------------------------------------
-// Pipeline: Ingest then Analyze (unchanged)
+// Pipeline: Ingest then Analyze
 // ------------------------------------------------------------------
 
 ingestForm.addEventListener("submit", async (e) => {
@@ -563,8 +575,14 @@ ingestForm.addEventListener("submit", async (e) => {
   try {
     const url = new URL("/api/ingest", window.location.origin);
     url.searchParams.set("ifc_path", fd.get("ifc_path"));
-    csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
-    csvToRepeatedParams("type", fd.get("type"), url.searchParams);
+    
+    // Grab multiple selections from the selects
+    const storeys = Array.from(document.getElementById('ingestStoreyFilter').selectedOptions).map(o => o.value);
+    const types = Array.from(document.getElementById('ingestTypeFilter').selectedOptions).map(o => o.value);
+    
+    addRepeatedParams("storey", storeys, url.searchParams);
+    addRepeatedParams("type", types, url.searchParams);
+    
     url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
 
     logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
@@ -584,7 +602,7 @@ ingestForm.addEventListener("submit", async (e) => {
 });
 
 // ------------------------------------------------------------------
-// Results table (unchanged, wired to new refresh button)
+// Results table
 // ------------------------------------------------------------------
 
 let currentStoreyFilter = "";
@@ -613,7 +631,8 @@ async function loadResults() {
     if (activeTab === "clashes") endpoint = "api/clashes";
     if (activeTab === "violations") endpoint = "api/violations";
     
-    const rows = await getJSON(`/${endpoint}?${params.toString()}`);
+    const urlStr = `/${endpoint}${params.toString() ? '?' + params.toString() : ''}`;
+    const rows = await getJSON(urlStr);
     renderRows(rows);
     logInfo(`Loaded ${rows ? rows.length : 0} row(s) into "${activeTab}" results.`);
   } catch (err) {
@@ -652,16 +671,27 @@ async function loadStoreys() {
         const response = await fetch('/api/filters/storeys');
         const data = await response.json();
         
-        const storeySelect = document.getElementById('storeyFilter');
-        if (!storeySelect) return;
-        storeySelect.innerHTML = '<option value="">All Storeys</option>'; // Reset
+        const resultStoreySelect = document.getElementById('storeyFilter');
+        const ingestStoreySelect = document.getElementById('ingestStoreyFilter');
+        
+        if (resultStoreySelect) resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
+        if (ingestStoreySelect) ingestStoreySelect.innerHTML = '<option value="">All Storeys (Leave empty)</option>';
         
         if (data.storeys) {
             data.storeys.forEach(storey => {
-                const opt = document.createElement('option');
-                opt.value = storey;
-                opt.textContent = storey;
-                storeySelect.appendChild(opt);
+                if (resultStoreySelect) {
+                    const opt1 = document.createElement('option');
+                    opt1.value = storey;
+                    opt1.textContent = storey;
+                    resultStoreySelect.appendChild(opt1);
+                }
+                
+                if (ingestStoreySelect) {
+                    const opt2 = document.createElement('option');
+                    opt2.value = storey;
+                    opt2.textContent = storey;
+                    ingestStoreySelect.appendChild(opt2);
+                }
             });
         }
     } catch (error) {
@@ -669,7 +699,7 @@ async function loadStoreys() {
     }
 }
 
-// Handle clicking "Apply Filters"
+// Handle clicking "Apply Filters" on the Results table
 const applyBtn = document.getElementById('applyFiltersBtn');
 if (applyBtn) {
     applyBtn.addEventListener('click', () => {
