@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BIM-Intellect</title>
+  <link rel="stylesheet" href="/static/style.css">
+<base target="_blank">
+</head>
+<body>
+
+  <header>
+    <h1>BIM-Intellect</h1>
+    <p class="subtitle">Regulatory Compliance &middot; IFC Graph &middot; Hybrid RAG</p>
+  </header>
+
+  <nav class="app-nav">
+    <button class="nav-btn active" data-tab="chat">Chat</button>
+    <button class="nav-btn" data-tab="pipeline">Pipeline</button>
+    <button class="nav-btn" data-tab="corpus">RAG Corpus</button>
+    <button class="nav-btn" data-tab="results">Results</button>
+  </nav>
+
+  <main>
+
+    <!-- ============ TAB: Chat ============ -->
+    <section class="tab-content active" id="tab-chat">
+      <div class="chat-layout">
+        <div class="chat-main">
+          <div id="chat-messages" class="chat-messages" aria-live="polite">
+            <div class="chat-welcome">
+              <h3>Welcome to BIM-Intellect</h3>
+              <p>Ask questions about building regulations (Mabhas 15) or the building model itself.</p>
+              <p class="hint">The system automatically routes your question to the regulation database, the building graph, or both.</p>
+              <div class="example-questions">
+                <button class="example-q" data-q="What is the minimum width for an elevator door per Mabhas 15?">What is the minimum width for an elevator door per Mabhas 15?</button>
+                <button class="example-q" data-q="How many stairs are on the ground floor?">How many stairs are on the ground floor?</button>
+                <button class="example-q" data-q="Does this building comply with Mabhas 15 for elevator clearances?">Does this building comply with Mabhas 15 for elevator clearances?</button>
+                <button class="example-q" data-q="Which elements clash with the elevator shaft?">Which elements clash with the elevator shaft?</button>
+              </div>
+            </div>
+          </div>
+          <form id="chat-form" class="chat-input-row">
+            <input type="text" id="chat-input" placeholder="Ask a question about regulations or the building model..." autocomplete="off">
+            <button type="submit" id="chat-send">Send</button>
+          </form>
+        </div>
+        <aside class="chat-sidebar">
+          <h4>Session Info</h4>
+          <div id="chat-meta" class="chat-meta">
+            <p class="hint">Ask a question to see source citations here.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ TAB: Pipeline ============ -->
+    <section class="tab-content" id="tab-pipeline">
+      <div class="panel">
+        <h2>Run Pipeline</h2>
+        <p class="hint">
+          Parses the IFC file, loads the resulting graph into Neo4j, then runs
+          clash &amp; clearance detection against it &mdash; one step, start to
+          finish.
+        </p>
+        <form id="ingest-form">
+          <label>IFC path
+            <input type="text" name="ifc_path" value="{{ default_ifc_path }}">
+          </label>
+          <div class="field-row">
+            <label>Storey filter <span class="hint">(semicolon-separated, optional)</span>
+              <input type="text" name="storey" placeholder="e.g. BLDG. 1,2,3- LEVEL 5 FLR. FIN.">
+            </label>
+            <label>Type filter <span class="hint">(semicolon-separated, optional)</span>
+              <input type="text" name="type" placeholder="e.g. IfcWall;IfcDoor">
+            </label>
+          </div>
+          <p class="hint">
+            Use <code>;</code> to list multiple storeys or types &mdash; not <code>,</code>, since some
+            storey names contain a literal comma.
+          </p>
+          <label class="checkbox-label">
+            <input type="checkbox" name="reset" checked>
+            Reset graph before loading
+          </label>
+          <button type="submit" id="ingest-submit">Run Ingestion &amp; Clash Detection</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-heading-row">
+          <h2>Console</h2>
+          <button type="button" class="ghost-btn" id="clear-log-btn">Clear</button>
+        </div>
+        <p class="hint">Live status for every stage of the run.</p>
+        <div id="log" class="console" aria-live="polite">
+          <div class="log-line log-muted">Idle. Run the pipeline to see activity here.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TAB: RAG Corpus ============ -->
+    <section class="tab-content" id="tab-corpus">
+      <div class="panel">
+        <h2>Upload Regulation PDF</h2>
+        <p class="hint">Upload a PDF to extract text chunks, embed them, and store them in ChromaDB for retrieval.</p>
+
+        <form id="upload-form" enctype="multipart/form-data">
+          <div id="drop-zone" class="drop-zone">
+            <p class="drop-zone-text">Drag &amp; drop a PDF here, or click to browse</p>
+            <input type="file" id="pdf-file" name="file" accept=".pdf" hidden>
+            <p class="drop-zone-file" id="drop-zone-file"></p>
+          </div>
+
+          <label>Document ID <span class="hint">(optional prefix for chunk IDs)</span>
+            <input type="text" id="doc-id" name="doc_id" placeholder="e.g. mabhas15">
+          </label>
+
+          <button type="submit" id="upload-submit">Upload &amp; Embed</button>
+        </form>
+
+        <div id="upload-status" class="upload-status hidden">
+          <p id="upload-status-text"></p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-heading-row">
+          <h2>Corpus Status</h2>
+          <button type="button" class="ghost-btn" id="refresh-corpus-btn">Refresh</button>
+        </div>
+        <div id="corpus-info" class="corpus-info">
+          <p class="hint">Loading corpus status...</p>
+        </div>
+        <button type="button" class="danger-btn" id="clear-corpus-btn">Clear Collection</button>
+      </div>
+    </section>
+
+    <!-- ============ TAB: Results ============ -->
+    <section class="tab-content" id="tab-results">
+      <div class="panel">
+        <div class="panel-heading-row">
+          <h2>Detected Issues</h2>
+          <button type="button" class="ghost-btn" id="refresh-results-btn">Refresh</button>
+        </div>
+        <div class="tabs">
+          <button class="tab-btn active" data-target="clashes">Clashes</button>
+          <button class="tab-btn" data-target="violations">Violations</button>
+          <button class="tab-btn" data-target="issues">All Issues</button>
+        </div>
+        <div id="results-table-wrap">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th>Type A</th><th>Name A</th>
+                <th>Type B</th><th>Name B</th>
+                <th>Issue</th><th>Metric</th>
+              </tr>
+            </thead>
+            <tbody id="results-body">
+              <tr><td colspan="6" class="empty">No data loaded. Run the pipeline, or click Refresh.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>BIM-Intellect &middot; Hybrid RAG for Building Compliance</p>
+  </footer>
+
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>
