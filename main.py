@@ -1,36 +1,32 @@
-"""
-FastAPI application entry point for BIM-Intellect.
-"""
-from fastapi import FastAPI, Request
+import os
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 
-from api.routes import router
-from bim_graph.config import DEFAULT_IFC_PATH
+from api.routes import router as api_router
 
-app = FastAPI(title="BIM-Intellect API", version="0.2.0")
+app = FastAPI(title="BIM-Intellect MVP")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(router, prefix="/api")
+os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
+# Mount our API routes — note: we no longer hard-prefix "/api" here 
+# because routes.py defines endpoints as "/api/...", "/rag/...", etc.
+app.include_router(api_router)
 
 @app.get("/")
-def dashboard(request: Request):
-    """Serves the classic black-and-white UI for interacting with the API."""
-    return templates.TemplateResponse(
-        request, "index.html", {"default_ifc_path": DEFAULT_IFC_PATH}
-    )
+def serve_frontend():
+    return FileResponse("static/index.html")
 
-
-@app.get("/health")
-def health():
-    return {"status": "BIM-Intellect API running"}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
