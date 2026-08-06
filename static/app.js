@@ -517,27 +517,10 @@ function formatAnalyzeSummary(data) {
 // HTTP helpers
 // ------------------------------------------------------------------
 
-// Original function logic restored for old text inputs
 function csvToRepeatedParams(paramName, rawValue, searchParams) {
   if (!rawValue) return;
   rawValue
     .split(";")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .forEach((v) => searchParams.append(paramName, v));
-}
-
-// Kept this for the Results Dropdowns which we are retaining
-function addRepeatedParams(paramName, rawValue, searchParams) {
-  if (!rawValue) return;
-  
-  if (Array.isArray(rawValue)) {
-      rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
-      return;
-  }
-  
-  rawValue
-    .split(",")
     .map((v) => v.trim())
     .filter(Boolean)
     .forEach((v) => searchParams.append(paramName, v));
@@ -548,11 +531,7 @@ async function postJSON(path, params) {
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       if (value === undefined || value === null || value === "") return;
-      if (Array.isArray(value)) {
-          value.forEach(v => url.searchParams.append(key, v));
-      } else {
-          url.searchParams.set(key, value);
-      }
+      url.searchParams.set(key, value);
     });
   }
   const response = await fetch(url, { method: "POST" });
@@ -584,11 +563,8 @@ ingestForm.addEventListener("submit", async (e) => {
   try {
     const url = new URL("/api/ingest", window.location.origin);
     url.searchParams.set("ifc_path", fd.get("ifc_path"));
-    
-    // Original semicolon-separated string extraction restored
     csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
     csvToRepeatedParams("type", fd.get("type"), url.searchParams);
-    
     url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
 
     logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
