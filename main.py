@@ -24,13 +24,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 def serve_frontend():
-    # If the user's index.html is actually called app.html or similar in their static folder,
-    # or if we should redirect to static/index.html instead of FileResponse
-    # Let's check for standard paths.
-    if os.path.exists("static/index.html"):
-        return FileResponse("static/index.html")
+    # The frontend HTML actually lives in templates/index.html
+    if os.path.exists("templates/index.html"):
+        return FileResponse("templates/index.html")
     # fallback to just serving text if missing so the backend still boots
-    return {"message": "BIM-Intellect Backend is running. Frontend missing from static/index.html"}
+    return {"message": "BIM-Intellect Backend is running. Frontend missing from templates/index.html"}
 
 if __name__ == "__main__":
     import uvicorn
