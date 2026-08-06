@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from bim_graph.config import DEFAULT_IFC_PATH
-from bim_graph.load_to_neo4j import load_graph
+from bim_graph.load_to_neo4j import load_csv_to_neo4j
 from bim_graph.clash_pipeline import run_clash_pipeline
 from extract_graph import extract_graph
 from rag.chunker import chunk_pdf
@@ -77,7 +77,7 @@ def get_results(storey: Optional[str] = None, types: Optional[str] = None):
 def ingest_model(ifc_path: str = Form(...), reset: bool = Form(True)):
     try:
         extract_graph(ifc_path)
-        load_graph(reset=reset)
+        load_csv_to_neo4j(reset=reset)
         run_clash_pipeline()
         return {"status": "success", "message": "Pipeline completed successfully."}
     except Exception as e:
