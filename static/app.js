@@ -649,7 +649,7 @@ loadCorpusStatus();
 // Fetch storeys from Neo4j when the page loads
 async function loadStoreys() {
     try {
-        const response = await fetch('/filters/storeys');
+        const response = await fetch('/api/filters/storeys');
         const data = await response.json();
         
         const storeySelect = document.getElementById('storeyFilter');
