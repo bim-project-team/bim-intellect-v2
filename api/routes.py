@@ -450,6 +450,7 @@ def ask_graph_only(req: QuestionRequest):
 # System Health Check
 # ------------------------------------------------------------------
 
+@router.get("/health/")
 @router.get("/health")
 def health_check():
     """
