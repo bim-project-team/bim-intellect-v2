@@ -517,6 +517,21 @@ function formatAnalyzeSummary(data) {
 // HTTP helpers
 // ------------------------------------------------------------------
 
+function addRepeatedParams(paramName, rawValue, searchParams) {
+  if (!rawValue) return;
+  
+  if (Array.isArray(rawValue)) {
+      rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
+      return;
+  }
+  
+  rawValue
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .forEach((v) => searchParams.append(paramName, v));
+}
+
 function csvToRepeatedParams(paramName, rawValue, searchParams) {
   if (!rawValue) return;
   rawValue
@@ -531,7 +546,11 @@ async function postJSON(path, params) {
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       if (value === undefined || value === null || value === "") return;
-      url.searchParams.set(key, value);
+      if (Array.isArray(value)) {
+          value.forEach(v => url.searchParams.append(key, v));
+      } else {
+          url.searchParams.set(key, value);
+      }
     });
   }
   const response = await fetch(url, { method: "POST" });
@@ -563,8 +582,22 @@ ingestForm.addEventListener("submit", async (e) => {
   try {
     const url = new URL("/api/ingest", window.location.origin);
     url.searchParams.set("ifc_path", fd.get("ifc_path"));
-    csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
-    csvToRepeatedParams("type", fd.get("type"), url.searchParams);
+    
+    // Grab multiple selections from the selects if they exist, otherwise fallback to old csv behavior
+    const storeySelect = document.getElementById('ingestStoreyFilter');
+    const typeSelect = document.getElementById('ingestTypeFilter');
+    
+    if (storeySelect && typeSelect) {
+        const storeys = Array.from(storeySelect.selectedOptions).map(o => o.value);
+        const types = Array.from(typeSelect.selectedOptions).map(o => o.value);
+        
+        addRepeatedParams("storey", storeys, url.searchParams);
+        addRepeatedParams("type", types, url.searchParams);
+    } else {
+        csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
+        csvToRepeatedParams("type", fd.get("type"), url.searchParams);
+    }
+    
     url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
 
     logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
@@ -605,15 +638,13 @@ async function loadResults() {
   resultsBody.innerHTML = `<tr><td colspan="6" class="empty">Loading...</td></tr>`;
   try {
     const params = new URLSearchParams();
-    if (currentStoreyFilter) params.append("storey", currentStoreyFilter);
-    if (currentTypesFilter.length > 0) params.append("types", currentTypesFilter.join(","));
     
     // Call the matching backend route depending on which tab is active
     let endpoint = "api/issues";
     if (activeTab === "clashes") endpoint = "api/clashes";
     if (activeTab === "violations") endpoint = "api/violations";
     
-    const urlStr = `/${endpoint}${params.toString() ? '?' + params.toString() : ''}`;
+    const urlStr = `/${endpoint}`;
     const rows = await getJSON(urlStr);
     renderRows(rows);
     logInfo(`Loaded ${rows ? rows.length : 0} row(s) into "${activeTab}" results.`);
@@ -646,6 +677,7 @@ function renderRows(rows) {
 // Init
 // ------------------------------------------------------------------
 loadCorpusStatus();
+loadResults();
 
 // Fetch storeys from Neo4j when the page loads (for results table only)
 async function loadStoreys() {
@@ -654,8 +686,10 @@ async function loadStoreys() {
         const data = await response.json();
         
         const resultStoreySelect = document.getElementById('storeyFilter');
+        const ingestStoreySelect = document.getElementById('ingestStoreyFilter');
         
         if (resultStoreySelect) resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
+        if (ingestStoreySelect) ingestStoreySelect.innerHTML = '<option value="">All Storeys (Leave empty)</option>';
         
         if (data.storeys) {
             data.storeys.forEach(storey => {
@@ -664,6 +698,13 @@ async function loadStoreys() {
                     opt1.value = storey;
                     opt1.textContent = storey;
                     resultStoreySelect.appendChild(opt1);
+                }
+                
+                if (ingestStoreySelect) {
+                    const opt2 = document.createElement('option');
+                    opt2.value = storey;
+                    opt2.textContent = storey;
+                    ingestStoreySelect.appendChild(opt2);
                 }
             });
         }
