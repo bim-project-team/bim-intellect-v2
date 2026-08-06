@@ -16,8 +16,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount our API routes WITHOUT a prefix, so routes.py handles the paths directly
-app.include_router(api_router)
+# Mount our API routes strictly under the /api prefix
+app.include_router(api_router, prefix="/api")
 
 # Mount frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
