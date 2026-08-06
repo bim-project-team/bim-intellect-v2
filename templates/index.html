@@ -107,7 +107,7 @@
                 <p class="hint">Absolute or relative path to the .ifc file on the server.</p>
               </div>
 
-              <!-- Replaced simple text inputs with modern multi-select dropdowns -->
+              <!-- Only changing Pipeline inputs to select as requested -->
               <div class="form-group">
                 <label for="ingestStoreyFilter">Storey Filter (Optional)</label>
                 <select id="ingestStoreyFilter" name="storey" multiple class="modern-select">
@@ -180,37 +180,6 @@
             <button id="refresh-results-btn" class="btn-secondary ml-2">Refresh</button>
           </div>
         </div>
-
-        <!-- FILTERS ROW -->
-        <div class="filters-row card-body" style="padding-bottom: 0;">
-            <div class="filters" style="display: flex; gap: 1rem; align-items: flex-end;">
-                <div class="form-group" style="margin-bottom: 0;">
-                    <label for="storeyFilter" style="font-size: 0.8rem; margin-bottom: 0.2rem;">Storey</label>
-                    <!-- Replaced text input with modern select -->
-                    <select id="storeyFilter" class="modern-select">
-                        <option value="">All Storeys</option>
-                    </select>
-                </div>
-                <div class="form-group" style="margin-bottom: 0;">
-                    <label for="typeFilter" style="font-size: 0.8rem; margin-bottom: 0.2rem;">IFC Types (hold Ctrl/Cmd to multi-select)</label>
-                    <!-- Replaced text input with modern multiple select -->
-                    <select id="typeFilter" multiple class="modern-select">
-                        <option value="IfcWall">IfcWall</option>
-                        <option value="IfcDoor">IfcDoor</option>
-                        <option value="IfcSlab">IfcSlab</option>
-                        <option value="IfcWindow">IfcWindow</option>
-                        <option value="IfcStair">IfcStair</option>
-                        <option value="IfcColumn">IfcColumn</option>
-                        <option value="IfcBeam">IfcBeam</option>
-                        <option value="IfcRoof">IfcRoof</option>
-                        <option value="IfcFurnishingElement">IfcFurnishingElement</option>
-                        <option value="IfcSpace">IfcSpace</option>
-                    </select>
-                </div>
-                <button id="applyFiltersBtn" class="btn-primary" style="height: 38px; padding: 0 1rem;">Apply</button>
-            </div>
-        </div>
-
         <div class="table-container card-body">
           <table class="data-table">
             <thead>
@@ -297,6 +266,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>
