@@ -208,15 +208,15 @@ def get_clashes_filtered(storey: Optional[str] = None, types: Optional[str] = No
                 params["storey"] = storey
             if types:
                 type_list = types.split(",")
-                where_clauses.append("(a.type IN $types OR b.type IN $types)")
+                where_clauses.append("(a.ifc_type IN $types OR b.ifc_type IN $types)")
                 params["types"] = type_list
             where_string = f"WHERE {' AND '.join(where_clauses)}"
             
             query = f"""
             MATCH (a)-[r:CLASHES_WITH]->(b)
             {where_string}
-            RETURN a.type AS a_type, a.name AS a_name,
-                   b.type AS b_type, b.name AS b_name,
+            RETURN a.ifc_type AS a_type, a.name AS a_name,
+                   b.ifc_type AS b_type, b.name AS b_name,
                    r.issue_type AS issue, r.metric AS metric
             LIMIT 1000
             """
@@ -236,15 +236,15 @@ def get_violations_filtered(storey: Optional[str] = None, types: Optional[str] =
                 params["storey"] = storey
             if types:
                 type_list = types.split(",")
-                where_clauses.append("(a.type IN $types OR b.type IN $types)")
+                where_clauses.append("(a.ifc_type IN $types OR b.ifc_type IN $types)")
                 params["types"] = type_list
             where_string = f"WHERE {' AND '.join(where_clauses)}"
             
             query = f"""
             MATCH (a)-[r:CLASHES_WITH]->(b)
             {where_string}
-            RETURN a.type AS a_type, a.name AS a_name,
-                   b.type AS b_type, b.name AS b_name,
+            RETURN a.ifc_type AS a_type, a.name AS a_name,
+                   b.ifc_type AS b_type, b.name AS b_name,
                    r.issue_type AS issue, r.metric AS metric
             LIMIT 1000
             """
@@ -264,15 +264,15 @@ def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = Non
                 params["storey"] = storey
             if types:
                 type_list = types.split(",")
-                where_clauses.append("(a.type IN $types OR b.type IN $types)")
+                where_clauses.append("(a.ifc_type IN $types OR b.ifc_type IN $types)")
                 params["types"] = type_list
             where_string = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
             
             query = f"""
             MATCH (a)-[r:CLASHES_WITH]->(b)
             {where_string}
-            RETURN a.type AS a_type, a.name AS a_name,
-                   b.type AS b_type, b.name AS b_name,
+            RETURN a.ifc_type AS a_type, a.name AS a_name,
+                   b.ifc_type AS b_type, b.name AS b_name,
                    r.issue_type AS issue, r.metric AS metric
             LIMIT 1000
             """
