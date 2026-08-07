@@ -1,188 +1,109 @@
-"""Orchestrates Vector, Graph, or Hybrid retrieval for BIM-Intellect RAG.
-
-Pipeline:
-    1. Route   → LLM decides if vector / graph / both are needed.
-    2. Retrieve → Fetch raw chunks from Chroma + raw records from Neo4j.
-    3. Generate → Single LLM call with combined context.
-
-Reuses the existing OpenRouter client (call_with_retries) and embedder
-(query_similar) so no new API keys or DB connections are required.
-"""
-
 import json
 import logging
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Any
 
-from embedder import query_similar
-from openrouter_client import (
-    CHAT_MODEL,
-    LLMConfigError,
-    LLMRequestError,
-    call_with_retries,
-    get_client,
-)
-
-from rag.prompts import ROUTER_PROMPT, COMBINE_PROMPT
 from bim_graph.graph_retriever import GraphRetriever
+from rag.openrouter_client import chat_completion
+from rag.prompts import ROUTER_PROMPT, COMBINE_PROMPT
+from rag.retriever import get_vector_context
 
 logger = logging.getLogger("bim_intellect.orchestrator")
 
 
-@dataclass
-class RetrievalResult:
-    vector_context: Optional[str] = None
-    graph_context: Optional[str] = None
-    sources: list = field(default_factory=list)
-
-    @property
-    def has_any_context(self) -> bool:
-        return bool(self.vector_context or self.graph_context)
-
-
-def _chat_callable(messages, model, temperature):
-    """Factory for a zero-arg callable compatible with call_with_retries."""
-    def _call():
-        client = get_client()
-        return client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-        )
-    return _call
-
-
-def _format_vector_results(results: dict) -> tuple:
-    """Turn Chroma query result into citation-tagged context + source metadata."""
-    docs = results.get("documents") or [[]]
-    metas = results.get("metadatas") or [[]]
-    if not docs or not docs[0]:
-        return "", []
-
-    blocks = []
-    sources = []
-    for doc, meta in zip(docs[0], metas[0]):
-        clause_id = meta.get("clause_id", "unknown")
-        blocks.append(f"[Clause {clause_id}] {doc}")
-        sources.append({
-            "type": "regulation",
-            "source": meta.get("source", "Mabhas 15"),
-            "clause_id": clause_id,
-        })
-    return "\n\n".join(blocks), sources
-
-
 class RAGOrchestrator:
-    """End-to-end RAG with automatic routing between vector and graph sources."""
+    """
+    Coordinates the Hybrid RAG flow:
+    1. Route: Decides if the question needs Vector DB, Graph DB, or both.
+    2. Retrieve: Fetches data from the selected sources.
+    3. Generate: Combines context and generates a final cited answer.
+    """
 
-    def __init__(self, n_results: int = 5):
-        self.n_results = n_results
+    def __init__(self):
         self.graph_retriever = GraphRetriever()
 
-    def route(self, question: str) -> dict:
-        """LLM decides which sources to query. Returns dict with needs_vector, needs_graph."""
+    def route_question(self, question: str) -> Dict[str, Any]:
+        """Ask the LLM to classify the required data sources."""
         messages = [
             {"role": "system", "content": ROUTER_PROMPT},
             {"role": "user", "content": question}
         ]
+
         try:
-            response = call_with_retries(
-                _chat_callable(messages, CHAT_MODEL, 0.0),
-                op_name="query router"
-            )
-            content = response.choices[0].message.content.strip()
+            content = chat_completion(messages, temperature=0.0)
+            
+            # Defensive clean up in case LLM added markdown block
+            content = content.replace("```json", "").replace("```", "").strip()
             decision = json.loads(content)
-        except (json.JSONDecodeError, LLMRequestError, LLMConfigError) as exc:
-            logger.warning("Router failed (%s) — falling back to both sources.", exc)
-            decision = {
-                "needs_vector": True,
-                "needs_graph": True,
-                "reasoning": f"Fallback due to error: {exc}"
+            
+            logger.info(f"Router decision: vector={decision.get('needs_vector')} "
+                        f"graph={decision.get('needs_graph')} | {decision.get('reasoning')}")
+            return decision
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Router failed to return valid JSON. Fallback to both sources. Error: {e}")
+        except Exception as e:
+            logger.warning(f"Router failed ({e}) — falling back to both sources.")
+
+        # Fail safe: if routing breaks, pull from everywhere
+        return {
+            "needs_vector": True,
+            "needs_graph": True,
+            "reasoning": "Fallback due to error"
+        }
+
+    def ask(self, question: str) -> Dict[str, Any]:
+        """Execute the full Hybrid RAG pipeline."""
+        decision = self.route_question(question)
+        
+        context_parts = []
+        sources = []
+        
+        # 1. Vector Retrieval (Regulations)
+        if decision.get("needs_vector", True):
+            try:
+                v_context, v_sources = get_vector_context(question, k=5)
+                if v_context:
+                    context_parts.append(f"--- REGULATION CONTEXT ---\n{v_context}")
+                    sources.extend(v_sources)
+            except Exception as e:
+                logger.error(f"Vector retrieval failed: {e}")
+
+        # 2. Graph Retrieval (BIM Elements)
+        if decision.get("needs_graph", True):
+            try:
+                g_result = self.graph_retriever.ask(question)
+                if g_result and g_result.get("context"):
+                    context_parts.append(f"--- BUILDING GRAPH CONTEXT ---\n{g_result['context']}")
+                    sources.extend(g_result.get("sources", []))
+            except Exception as e:
+                logger.error(f"Graph retrieval failed: {e}")
+
+        # 3. Combine and Generate
+        if not context_parts:
+            # If no context was retrieved at all, short-circuit
+            return {
+                "answer": "I couldn't find any relevant regulations or building elements to answer your question.",
+                "sources": [],
+                "used_vector": decision.get("needs_vector", True),
+                "used_graph": decision.get("needs_graph", True)
             }
 
-        decision.setdefault("needs_vector", True)
-        decision.setdefault("needs_graph", True)
-        return decision
+        combined_context = "\n\n".join(context_parts)
+        prompt = COMBINE_PROMPT.format(context=combined_context, question=question)
 
-    def retrieve(self, question: str) -> RetrievalResult:
-        """Retrieve from selected sources based on routing decision."""
-        decision = self.route(question)
-        result = RetrievalResult()
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
 
-        logger.info(
-            "Router decision: vector=%s graph=%s | %s",
-            decision["needs_vector"], decision["needs_graph"],
-            decision.get("reasoning", "")
-        )
-
-        # 2a) Vector / Regulation path
-        if decision.get("needs_vector"):
-            try:
-                chroma_results = query_similar(question, n_results=self.n_results)
-                context, sources = _format_vector_results(chroma_results)
-                if context:
-                    result.vector_context = context
-                    result.sources.extend(sources)
-                else:
-                    logger.info("Vector retrieval returned no chunks.")
-            except Exception as exc:
-                logger.error("Vector retrieval failed: %s", exc)
-
-        # 2b) Graph / Neo4j path
-        if decision.get("needs_graph"):
-            try:
-                graph_answer = self.graph_retriever.ask(question)
-                if graph_answer.get("context"):
-                    cypher = graph_answer.get("cypher_query", "")
-                    result.graph_context = (
-                        f"Query executed: {cypher}\n\n{graph_answer['context']}"
-                    )
-                    result.sources.extend(graph_answer.get("sources", []))
-                else:
-                    logger.info("Graph retrieval returned no data.")
-            except Exception as exc:
-                logger.error("Graph retrieval failed: %s", exc)
-
-        return result
-
-    def generate(self, question: str, retrieval: RetrievalResult) -> str:
-        """Combine contexts and generate final answer via single LLM call."""
-        if not retrieval.has_any_context:
-            return (
-                "I couldn't find relevant information in the regulations or "
-                "building data to answer this question. Try rephrasing or "
-                "confirm that both the regulation corpus and the building graph "
-                "have been ingested."
-            )
-
-        prompt = COMBINE_PROMPT.format(
-            vector_context=retrieval.vector_context or "No regulatory context retrieved.",
-            graph_context=retrieval.graph_context or "No building graph context retrieved.",
-            question=question
-        )
-
-        messages = [{"role": "user", "content": prompt}]
         try:
-            response = call_with_retries(
-                _chat_callable(messages, CHAT_MODEL, 0.3),
-                op_name="final answer generation"
-            )
-            return response.choices[0].message.content or ""
-        except (LLMRequestError, LLMConfigError) as exc:
-            logger.error("Final generation failed: %s", exc)
-            raise
-
-    def ask(self, question: str) -> dict:
-        """Full pipeline: Route → Retrieve → Generate."""
-        if not question or not question.strip():
-            raise ValueError("Question cannot be empty.")
-
-        retrieval = self.retrieve(question)
-        answer = self.generate(question, retrieval)
+            answer = chat_completion(messages, temperature=0.0)
+        except Exception as e:
+            logger.error(f"Generation failed: {e}")
+            answer = "Sorry, I encountered an error while generating the final answer."
 
         return {
             "answer": answer,
-            "sources": retrieval.sources,
-            "used_vector": retrieval.vector_context is not None,
-            "used_graph": retrieval.graph_context is not None,
+            "sources": sources,
+            "used_vector": decision.get("needs_vector", True),
+            "used_graph": decision.get("needs_graph", True)
         }
