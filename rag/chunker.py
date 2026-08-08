@@ -36,7 +36,11 @@ def normalize_persian_text(text: str) -> str:
     return text.translate(replacements)
 
 CLAUSE_PATTERN = re.compile(
-    r"(?<!\d)(\d{1,2}(?:\s*-\s*\d{1,2}){2,4})(?!\d)"
+    r"(?<!\d)(15(?:\s*-\s*\d{1,2}){1,4})(?!\d)"
+)
+
+APPENDIX_PATTERN = re.compile(
+    r"پیوست\s*[0-9۰-۹]+"
 )
 def canonicalize_clause_id(raw_id: str) -> str:
     """Convert RTL-reversed clause IDs to canonical order."""
@@ -76,9 +80,14 @@ def chunk_pdf(pdf_path: str, doc_id: str = "mabhas15") -> list[Chunk]:
     pages = extract_text_by_page(pdf_path)
     result = []
     counter = 0
+    current_clause_id: str | None = None
 
     for page_num, page_text in pages:
-        current_clause_id: str | None = None
+    # Appendix pages contain tables and figures, not clause-based
+    # regulatory requirements.
+        if APPENDIX_PATTERN.search(page_text[:500]):
+            current_clause_id = None
+            continue
 
         for piece in chunk_text(page_text):
             if not piece.strip():
@@ -88,6 +97,9 @@ def chunk_pdf(pdf_path: str, doc_id: str = "mabhas15") -> list[Chunk]:
 
             if detected_clause_id is not None:
                 current_clause_id = detected_clause_id
+
+            if current_clause_id is None:
+                continue
 
             result.append(
                 Chunk(

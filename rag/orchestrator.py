@@ -11,6 +11,7 @@ Reuses the existing OpenRouter client (call_with_retries) and embedder
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -153,6 +154,73 @@ def filter_sources(sources: list[dict]) -> list[dict]:
             valid.append(source)
 
     return deduplicate_sources(valid)
+CITATION_PATTERN = re.compile(
+    r"(?:\[)?Clause\s+([0-9]+(?:-[0-9]+)+)"
+    r"\s*,?\s*Page\s+([0-9]+)(?:\])?",
+    re.IGNORECASE,
+)
+
+
+def cited_regulation_pairs(answer: str) -> set[tuple[str, str]]:
+    return {
+        (clause_id.strip(), page_number.strip())
+        for clause_id, page_number in CITATION_PATTERN.findall(answer or "")
+    }
+
+
+def supported_regulation_pairs(
+    sources: list[dict],
+) -> set[tuple[str, str]]:
+    return {
+        (
+            str(source.get("clause_id", "")).strip(),
+            str(source.get("page_number", "")).strip(),
+        )
+        for source in sources
+        if source.get("type", "regulation") == "regulation"
+        and valid_source(source)
+    }
+
+
+def validate_generated_answer(
+    answer: str,
+    sources: list[dict],
+    requires_regulatory_citation: bool = False,
+) -> bool:
+    cited = cited_regulation_pairs(answer)
+    supported = supported_regulation_pairs(sources)
+
+    if cited - supported:
+        logger.warning(
+            "Answer contains unsupported citations: %s",
+            sorted(cited - supported),
+        )
+        return False
+
+    if requires_regulatory_citation and not cited:
+        logger.warning("Regulatory answer contains no clause/page citation.")
+        return False
+
+    return True
+
+def sources_used_by_answer(
+    answer: str,
+    sources: list[dict],
+) -> list[dict]:
+    cited = cited_regulation_pairs(answer)
+
+    if not cited:
+        return []
+
+    return [
+        source
+        for source in sources
+        if source.get("type", "regulation") != "regulation"
+        or (
+            str(source.get("clause_id", "")).strip(),
+            str(source.get("page_number", "")).strip(),
+        ) in cited
+    ]
 
 class RAGOrchestrator:
     """End-to-end RAG with automatic routing between vector and graph sources."""
@@ -271,9 +339,30 @@ class RAGOrchestrator:
 
         answer = self.generate(question, retrieval)
 
+        requires_regulatory_citation = (
+            retrieval.vector_context is not None
+        )
+
+        if not validate_generated_answer(
+            answer,
+            retrieval.sources,
+            requires_regulatory_citation=requires_regulatory_citation,
+        ):
+            answer = (
+                "Insufficient evidence. The retrieved regulation context "
+                "does not support a traceable answer with valid clause IDs "
+                "and page numbers."
+            )
+            answer_sources = []
+        else:
+            answer_sources = sources_used_by_answer(
+                answer,
+                retrieval.sources,
+            )
+
         return {
             "answer": answer,
-            "sources": retrieval.sources,
+            "sources": answer_sources,
             "used_vector": retrieval.vector_context is not None,
             "used_graph": retrieval.graph_context is not None,
         }
