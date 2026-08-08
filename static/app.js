@@ -267,13 +267,19 @@ function appendChatMessage(role, text, sources) {
     tagsDiv.className = "chat-sources";
     sources.forEach((src) => {
       const tag = document.createElement("span");
-      tag.className = `chat-source-tag ${src.type}`;
+      tag.className = `chat-source-tag ${src.type || "regulation"}`;
       if (src.type === "regulation") {
-        tag.textContent = `Clause ${src.clause_id || "?"}`;
-        tag.title = `Source: ${src.source || "Regulation"}`;
+        tag.textContent =
+          `Clause ${src.clause_id || "?"}, Page ${src.page_number || "?"}`;
+
+        tag.title =
+          `Source: ${src.source || "Regulation"} | Page ${src.page_number || "?"}`;
       } else if (src.type === "graph") {
-        tag.textContent = `${src.ifc_type || "Element"} ${src.name || src.element_id || ""}`;
-        tag.title = `Element ID: ${src.element_id || "?"}`;
+        tag.textContent =
+          `${src.ifc_type || "Element"} ${src.name || src.element_id || ""}`;
+
+        tag.title =
+          `Element ID: ${src.element_id || "?"}`;
       } else {
         tag.textContent = JSON.stringify(src);
       }
@@ -376,9 +382,30 @@ function updateChatMeta(data) {
     html += `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;">`;
     data.sources.forEach((src) => {
       if (src.type === "regulation") {
-        html += `<span class="chat-source-tag regulation">Clause ${escapeHtml(src.clause_id || "?")}</span>`;
+        const clause = escapeHtml(String(src.clause_id || "?"));
+        const page = escapeHtml(String(src.page_number || "?"));
+        const source = escapeHtml(String(src.source || "Regulation"));
+
+        html += `
+          <span
+            class="chat-source-tag regulation"
+            title="Source: ${source} | Page ${page}">
+            Clause ${clause}, Page ${page}
+          </span>
+        `;
       } else if (src.type === "graph") {
-        html += `<span class="chat-source-tag graph" title="${escapeHtml(src.element_id || "")}">${escapeHtml(src.ifc_type || "Element")}</span>`;
+        const elementId = escapeHtml(String(src.element_id || ""));
+        const label = escapeHtml(
+          String(src.ifc_type || src.name || "Element")
+        );
+
+        html += `
+          <span
+            class="chat-source-tag graph"
+            title="Element ID: ${elementId}">
+            ${label}
+          </span>
+        `;
       }
     });
     html += `</div>`;
