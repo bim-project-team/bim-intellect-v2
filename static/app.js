@@ -154,6 +154,7 @@ class MultiSelectDropdown {
 // ------------------------------------------------------------------
 let activeTab = "clashes"; // for results sub-tabs
 let activeNav = "chat";    // for main navigation
+let selectedElementId = null;
 
 // ------------------------------------------------------------------
 // DOM refs
@@ -329,10 +330,17 @@ async function sendChat(question) {
   showTypingIndicator();
 
   try {
+    const payload = {
+      question: question.trim(),
+      selected_element_id: selectedElementId,
+    };
+
+    console.log("Sending /api/ask:", payload);
+
     const response = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(payload),
     });
 
     const data = await response.json().catch(() => ({
