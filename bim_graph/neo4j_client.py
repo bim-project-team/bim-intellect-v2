@@ -35,6 +35,40 @@ class Neo4jClient:
             result = session.run(query, parameters or {})
             return [record.data() for record in result]
 
+    def validate(self, query: str) -> tuple[bool, list[str]]:
+        """Check a query's validity/planner warnings via EXPLAIN, without
+        executing it against real data.
+
+        Returns (is_valid, warning_messages). is_valid=False means the
+        query has a syntax/semantic error (e.g. unknown procedure) and
+        was never planned. is_valid=True with non-empty warnings means
+        the query planned successfully but Neo4j flagged something
+        suspicious - e.g. "the property `id` is never used", which is
+        exactly the shape of warning a wrong tag-vs-id match would
+        produce. Callers should log these warnings rather than treat
+        them as fatal, since some are benign (e.g. unused label hints).
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(f"EXPLAIN {query}")
+                summary = result.consume()
+                warnings = [n.description for n in summary.notifications]
+                return True, warnings
+        except Exception as exc:
+            return False, [str(exc)]
+
+    def count_label(self, label: str) -> int:
+        """Return the total number of nodes with the given label. Used to
+        distinguish 'the filter is wrong' (label has nodes, none matched)
+        from 'there's genuinely no data' (label is empty) when a filtered
+        query returns zero rows. `label` must come from a value already
+        validated against known schema labels (e.g. extracted from a
+        generated Cypher string), never directly from unsanitized user
+        input, since it's interpolated into the query.
+        """
+        result = self.run(f"MATCH (n:{label}) RETURN count(n) AS c")
+        return result[0]["c"] if result else 0
+
     def run_batched(self, query, rows, batch_size):
         """
         Run `query` repeatedly with `UNWIND $rows AS row` semantics, splitting

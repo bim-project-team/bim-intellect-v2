@@ -28,6 +28,14 @@ Database Schema:
   - storeyName is the RAW IFC storey label (e.g. "BLDG. 1,2,3- LEVEL 5 FLR. FIN."), never a clean name
     like "Level 5" or "Ground Floor" — ALWAYS match it with toUpper(e.storeyName) CONTAINS 'LEVEL 5',
     never with `=`.
+  - Elements are often referenced by a trailing numeric ID embedded in their `name`,
+    e.g. "Basic Wall:MockUp Storage Wall:817660" — that trailing number (817660) is
+    NOT the same as the `id` property (an internal graph identifier string, e.g.
+    "0ducQKkW5EGQM9rQ5zdPqd"). When a question references an element by a bare
+    numeric ID (e.g. "wall 817660", "element 817660"), match it against `name`
+    using `e.name CONTAINS '817660'` — NEVER match a numeric ID against `id`.
+    If a `tag` property is present on the node, prefer `e.tag = '817660'`
+    (exact match) over `name CONTAINS`, since it is more precise.
 - Relationships (Element)-[r]->(Element), dynamic types:
   - AGGREGATES, CONTAINS, BOUNDS, PORT_OF — structural/spatial, no properties
   - CLASHES_WITH — precomputed by the clash pipeline, directed a->b, ALWAYS has:
@@ -41,6 +49,7 @@ Examples:
 - "Count stairs per storey" → MATCH (s:IfcStair) RETURN s.storeyName AS storey, count(s) AS stair_count ORDER BY stair_count DESC
 - "How many clearance violations with zero gap exist on Level 5?" → MATCH (a:Element)-[r:CLASHES_WITH {{issue: 'CLEARANCE_VIOLATION'}}]->(b:Element) WHERE r.metric = 0 AND (toUpper(a.storeyName) CONTAINS 'LEVEL 5' OR toUpper(b.storeyName) CONTAINS 'LEVEL 5') RETURN count(r) AS violation_count
 - "List all hard clashes on the 3rd floor" → MATCH (a:Element)-[r:CLASHES_WITH {{issue: 'CLASH'}}]->(b:Element) WHERE toUpper(a.storeyName) CONTAINS 'LEVEL 3' OR toUpper(b.storeyName) CONTAINS 'LEVEL 3' RETURN a.name, b.name, r.metric ORDER BY r.metric DESC LIMIT 50
+- "Does wall 817660 clash with any doors?" → MATCH (w:IfcWall)-[r:CLASHES_WITH]-(d:IfcDoor) WHERE w.name CONTAINS '817660' RETURN d.name, d.id, r.issue, r.metric LIMIT 50
 
 Rules:
 1. Return ONLY the Cypher query string. No markdown, no explanation, no JSON.

@@ -8,6 +8,8 @@ venv/
 
 .notebooks/
 
+tests/
+
 # Environment variables
 .env
 
@@ -33,3 +35,6 @@ rag/inspect_chroma.py
 .DS_Store
 __pycache__/
 *.pyc
+
+pytest.ini
+*.ini
