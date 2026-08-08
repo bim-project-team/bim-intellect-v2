@@ -10,14 +10,11 @@ instead of hitting api.openai.com directly. See openrouter_client.py for
 the shared client/retry setup.
 """
 import os
-from chromadb.config import Settings
-import sys
-from typing import List
+
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
-# Fix the import path so it works when run as a module
-from rag.chunker import Chunk, chunk_pdf
-from rag.openrouter_client import (
+from chunker import Chunk, chunk_pdf
+from openrouter_client import (
     EMBEDDING_MODEL,
     LLMConfigError,
     LLMRequestError,

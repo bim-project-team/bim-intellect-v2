@@ -27,9 +27,11 @@ from openrouter_client import (
 
 SYSTEM_PROMPT = """You are a regulatory compliance assistant for building code Mabhas 15
 (elevators and escalators). Answer ONLY using the provided context chunks.
-Every factual claim MUST cite its clause_id in the format [Clause X.X].
+Every factual claim MUST cite its source in the format [Clause X.X, Page Y],
+using exactly the clause number and page number given in the context block
+for that chunk (each context block is already tagged like "[Clause X.X, Page Y]").
 If the context does not contain a clear answer, say so explicitly instead of guessing.
-Never invent a clause number that is not present in the provided context."""
+Never invent a clause number or page number that is not present in the provided context."""
 
 NO_CONTEXT_ANSWER = (
     "I couldn't find any clauses in the indexed regulation text relevant "
@@ -47,7 +49,9 @@ def build_context(results: dict) -> str:
         return ""
     blocks = []
     for doc, meta in zip(docs[0], metas[0]):
-        blocks.append(f"[Clause {meta.get('clause_id', 'unknown')}] {doc}")
+        clause = meta.get("clause_id", "unknown")
+        page = meta.get("page_number", "unknown")
+        blocks.append(f"[Clause {clause}, Page {page}] {doc}")
     return "\n\n".join(blocks)
 
 
@@ -183,10 +187,11 @@ def _run_interactive_chat() -> None:
 
         print(f"\nassistant> {result['answer']}")
         if result["sources"]:
-            clause_ids = ", ".join(
-                str(s.get("clause_id", "unknown")) for s in result["sources"]
+            citations = ", ".join(
+                f"Clause {s.get('clause_id', 'unknown')} (p.{s.get('page_number', 'unknown')})"
+                for s in result["sources"]
             )
-            print(f"  sources: {clause_ids}")
+            print(f"  sources: {citations}")
         print()
 
 

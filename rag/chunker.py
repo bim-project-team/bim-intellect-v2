@@ -1,57 +1,68 @@
+"""
+Chunks a regulatory PDF into overlapping text segments for embedding.
+Each chunk retains a traceable clause reference for citation integrity.
+
+MVP scope: single regulatory PDF (Mabhas 15 — elevator/stair clearance).
+"""
 import re
-from typing import List, Dict, Any
+from dataclasses import dataclass
 from pypdf import PdfReader
 
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 150
 
-def chunk_pdf(pdf_path: str, doc_id: str = "doc") -> List[Dict[str, Any]]:
-    """
-    Reads a PDF, extracts text page by page, and splits it into overlapping chunks.
-    Attempts to extract structural clause numbers (e.g., "4.2.1") via regex.
-    """
+@dataclass
+class Chunk:
+    chunk_id: str
+    text: str
+    page_number: int
+    clause_id: str | None
+
+
+CLAUSE_PATTERN = re.compile(r"(\d+\.\d+(\.\d+)?)")
+
+
+def extract_text_by_page(pdf_path: str) -> list[tuple[int, str]]:
+    reader = PdfReader(pdf_path)
+    return [(i + 1, page.extract_text() or "") for i, page in enumerate(reader.pages)]
+
+
+def guess_clause_id(text: str) -> str | None:
+    """Best-effort extraction of a clause number from chunk text for citation."""
+    match = CLAUSE_PATTERN.search(text)
+    return match.group(1) if match else None
+
+
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
+    """Sliding-window chunking by character count."""
     chunks = []
-    
-    try:
-        reader = PdfReader(pdf_path)
-    except Exception as e:
-        print(f"Error reading PDF {pdf_path}: {e}")
-        return chunks
-
-    for page_num, page in enumerate(reader.pages, start=1):
-        text = page.extract_text()
-        if not text:
-            continue
-            
-        # Clean up whitespace and line breaks
-        text = " ".join(text.split())
-        
-        # Simple sliding window chunker
-        start = 0
-        text_len = len(text)
-        
-        while start < text_len:
-            end = start + CHUNK_SIZE
-            chunk_text = text[start:end]
-            
-            # Very basic regex to find clause numbers like "15-4-2" or "4.2.1"
-            # Expanded to catch more generic numbers at the start of sentences
-            clause_match = re.search(r'\b(?:clause|section)?\s*(\d+[\.\-]\d+(?:[\.\-]\d+)?)\b', chunk_text, re.IGNORECASE)
-            clause_id = clause_match.group(1) if clause_match else "unknown"
-            
-            # If we couldn't find a clause but the chunk is from a regulation, label it as such
-            if clause_id == "unknown":
-                clause_id = f"Page {page_num}"
-                
-            chunk_id = f"{doc_id}-p{page_num}-c{start}"
-            
-            chunks.append({
-                "chunk_id": chunk_id,
-                "text": chunk_text.strip(),
-                "page_number": page_num,
-                "clause_id": clause_id
-            })
-            
-            start += (CHUNK_SIZE - CHUNK_OVERLAP)
-            
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
     return chunks
+
+
+def chunk_pdf(pdf_path: str, doc_id: str = "mabhas15") -> list[Chunk]:
+    pages = extract_text_by_page(pdf_path)
+    result = []
+    counter = 0
+    for page_num, page_text in pages:
+        for piece in chunk_text(page_text):
+            if not piece.strip():
+                continue
+            clause = guess_clause_id(piece)
+            result.append(Chunk(
+                chunk_id=f"{doc_id}-p{page_num}-c{counter}",
+                text=piece.strip(),
+                page_number=page_num,
+                clause_id=clause,
+            ))
+            counter += 1
+    return result
+
+
+if __name__ == "__main__":
+    import sys, json
+    chunks = chunk_pdf(sys.argv[1])
+    print(json.dumps([c.__dict__ for c in chunks[:5]], indent=2, ensure_ascii=False))
+    print(f"Total chunks: {len(chunks)}")

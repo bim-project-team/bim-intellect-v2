@@ -1,6 +1,155 @@
 // BIM-Intellect Frontend — Chat, Pipeline, Corpus, Results
 
 // ------------------------------------------------------------------
+// Reusable checkbox-dropdown multiselect widget
+// ------------------------------------------------------------------
+class MultiSelectDropdown {
+  constructor(rootId, { emptyText = "None found" } = {}) {
+    this.root = document.getElementById(rootId);
+    if (!this.root) return;
+
+    this.toggleBtn = this.root.querySelector(".multiselect-toggle");
+    this.toggleLabel = this.root.querySelector(".multiselect-toggle-label");
+    this.panel = this.root.querySelector(".multiselect-panel");
+    this.optionsEl = this.root.querySelector(".multiselect-options");
+    this.searchInput = this.root.querySelector(".multiselect-search");
+    this.emptyText = emptyText;
+    this.options = []; // [{value, label, count}]
+    this.selected = new Set();
+
+    this.toggleBtn.addEventListener("click", () => {
+      if (this.toggleBtn.disabled) return;
+      this.isOpen() ? this.close() : this.open();
+    });
+
+    this.root.querySelectorAll('[data-action="all"]').forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this.options.forEach((o) => this.selected.add(o.value));
+        this._syncCheckboxes();
+        this._updateLabel();
+      })
+    );
+    this.root.querySelectorAll('[data-action="none"]').forEach((btn) =>
+      btn.addEventListener("click", () => {
+        this.selected.clear();
+        this._syncCheckboxes();
+        this._updateLabel();
+      })
+    );
+
+    if (this.searchInput) {
+      this.searchInput.addEventListener("input", () => this._renderOptions());
+      this.searchInput.addEventListener("click", (e) => e.stopPropagation());
+    }
+
+    document.addEventListener("click", (e) => {
+      if (!this.root.contains(e.target)) this.close();
+    });
+
+    this.disable("Select an IFC file first");
+  }
+
+  isOpen() {
+    return this.root.classList.contains("open");
+  }
+
+  open() {
+    this.root.classList.add("open");
+    this.panel.classList.remove("hidden");
+    if (this.searchInput) {
+      this.searchInput.value = "";
+      this.searchInput.focus();
+      this._renderOptions();
+    }
+  }
+
+  close() {
+    this.root.classList.remove("open");
+    this.panel.classList.add("hidden");
+  }
+
+  disable(placeholderText) {
+    this.options = [];
+    this.selected.clear();
+    this.toggleBtn.disabled = true;
+    this.toggleLabel.textContent = placeholderText;
+    this.optionsEl.innerHTML = "";
+    this.close();
+  }
+
+  setOptions(options) {
+    // options: [{value, label, count?}]
+    this.options = options || [];
+    this.selected.clear();
+    this.toggleBtn.disabled = this.options.length === 0;
+    this._renderOptions();
+    this._updateLabel();
+  }
+
+  getSelected() {
+    return Array.from(this.selected);
+  }
+
+  _renderOptions() {
+    const filter = this.searchInput ? this.searchInput.value.trim().toLowerCase() : "";
+    const visible = filter
+      ? this.options.filter((o) => o.label.toLowerCase().includes(filter))
+      : this.options;
+
+    if (this.options.length === 0) {
+      this.optionsEl.innerHTML = `<div class="multiselect-empty">${this.emptyText}</div>`;
+      return;
+    }
+    if (visible.length === 0) {
+      this.optionsEl.innerHTML = `<div class="multiselect-empty">No matches</div>`;
+      return;
+    }
+
+    this.optionsEl.innerHTML = visible
+      .map((o) => {
+        const checked = this.selected.has(o.value) ? "checked" : "";
+        const countHtml = o.count !== undefined ? `<span class="option-count">${o.count}</span>` : "";
+        return `
+          <label class="multiselect-option">
+            <input type="checkbox" value="${o.value}" ${checked} />
+            <span class="option-label">${o.label}</span>
+            ${countHtml}
+          </label>
+        `;
+      })
+      .join("");
+
+    this.optionsEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) this.selected.add(cb.value);
+        else this.selected.delete(cb.value);
+        this._updateLabel();
+      });
+    });
+  }
+
+  _syncCheckboxes() {
+    this.optionsEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.checked = this.selected.has(cb.value);
+    });
+  }
+
+  _updateLabel() {
+    const n = this.selected.size;
+    if (this.options.length === 0) {
+      this.toggleLabel.textContent = this.emptyText;
+    } else if (n === 0) {
+      this.toggleLabel.textContent = "All";
+    } else if (n <= 2) {
+      const labels = this.options.filter((o) => this.selected.has(o.value)).map((o) => o.label);
+      this.toggleLabel.textContent = labels.join(", ");
+    } else {
+      this.toggleLabel.textContent = `${n} selected`;
+    }
+  }
+}
+
+// ------------------------------------------------------------------
 // State
 // ------------------------------------------------------------------
 let activeTab = "clashes"; // for results sub-tabs
@@ -25,6 +174,14 @@ const refreshResultsBtn = document.getElementById("refresh-results-btn");
 const clearLogBtn = document.getElementById("clear-log-btn");
 const ingestForm = document.getElementById("ingest-form");
 const ingestSubmitBtn = document.getElementById("ingest-submit");
+
+const ifcDropZone = document.getElementById("ifc-drop-zone");
+const ifcFileInput = document.getElementById("ifc-file");
+const ifcDropZoneFile = document.getElementById("ifc-drop-zone-file");
+const ifcPathHidden = document.getElementById("ifc_path");
+
+const ingestStoreyDropdown = new MultiSelectDropdown("ingestStoreyFilter", { emptyText: "No storeys found in this file" });
+const ingestTypeDropdown = new MultiSelectDropdown("ingestTypeFilter", { emptyText: "No types found in this file" });
 
 const dropZone = document.getElementById("drop-zone");
 const pdfFileInput = document.getElementById("pdf-file");
@@ -58,6 +215,13 @@ navButtons.forEach((btn) => {
     // Auto-load corpus status when opening that tab
     if (target === "corpus") {
       loadCorpusStatus();
+    }
+
+    // Refresh Results tab filter options (Neo4j-backed) each time it's opened,
+    // in case an ingest happened since the last visit.
+    if (target === "results") {
+      loadStoreys();
+      loadTypes();
     }
   });
 });
@@ -519,12 +683,12 @@ function formatAnalyzeSummary(data) {
 
 function addRepeatedParams(paramName, rawValue, searchParams) {
   if (!rawValue) return;
-  
+
   if (Array.isArray(rawValue)) {
       rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
       return;
   }
-  
+
   rawValue
     .split(",")
     .map((v) => v.trim())
@@ -577,27 +741,31 @@ async function getJSON(path) {
 ingestForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(ingestForm);
+
+  const ifcPath = fd.get("ifc_path");
+  if (!ifcPath) {
+    logError("Pipeline failed", "Select an IFC file first (drag & drop or click to browse).");
+    return;
+  }
+
   ingestSubmitBtn.disabled = true;
 
   try {
     const url = new URL("/api/ingest", window.location.origin);
-    url.searchParams.set("ifc_path", fd.get("ifc_path"));
-    
-    // Grab multiple selections from the selects if they exist, otherwise fallback to old csv behavior
-    const storeySelect = document.getElementById('ingestStoreyFilter');
-    const typeSelect = document.getElementById('ingestTypeFilter');
-    
-    if (storeySelect && typeSelect) {
-        const storeys = Array.from(storeySelect.selectedOptions).map(o => o.value);
-        const types = Array.from(typeSelect.selectedOptions).map(o => o.value);
-        
+    url.searchParams.set("ifc_path", ifcPath);
+
+    // Grab multiple selections from the checkbox-dropdowns if they exist, otherwise fallback to old csv behavior
+    if (ingestStoreyDropdown.root && ingestTypeDropdown.root) {
+        const storeys = ingestStoreyDropdown.getSelected();
+        const types = ingestTypeDropdown.getSelected();
+
         addRepeatedParams("storey", storeys, url.searchParams);
         addRepeatedParams("type", types, url.searchParams);
     } else {
         csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
         csvToRepeatedParams("type", fd.get("type"), url.searchParams);
     }
-    
+
     url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
 
     logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
@@ -608,6 +776,10 @@ ingestForm.addEventListener("submit", async (e) => {
     const analyzeData = await postJSON("/api/analyze");
     logSuccess("Clash detection complete", formatAnalyzeSummary(analyzeData));
 
+    // The graph just changed (new/updated storeys, types, clashes) - refresh
+    // the Results tab's filter options before loading results.
+    await loadStoreys();
+    await loadTypes();
     await loadResults();
   } catch (err) {
     logError("Pipeline failed", err.message || err);
@@ -637,15 +809,18 @@ refreshResultsBtn.addEventListener("click", loadResults);
 async function loadResults() {
   resultsBody.innerHTML = `<tr><td colspan="6" class="empty">Loading...</td></tr>`;
   try {
-    const params = new URLSearchParams();
-    
     // Call the matching backend route depending on which tab is active
     let endpoint = "api/issues";
     if (activeTab === "clashes") endpoint = "api/clashes";
     if (activeTab === "violations") endpoint = "api/violations";
-    
-    const urlStr = `/${endpoint}`;
-    const rows = await getJSON(urlStr);
+
+    const url = new URL(`/${endpoint}`, window.location.origin);
+    if (currentStoreyFilter) url.searchParams.set("storey", currentStoreyFilter);
+    if (currentTypesFilter && currentTypesFilter.length > 0) {
+      url.searchParams.set("types", currentTypesFilter.join(","));
+    }
+
+    const rows = await getJSON(url.pathname + url.search);
     renderRows(rows);
     logInfo(`Loaded ${rows ? rows.length : 0} row(s) into "${activeTab}" results.`);
   } catch (err) {
@@ -679,38 +854,185 @@ function renderRows(rows) {
 loadCorpusStatus();
 loadResults();
 
-// Fetch storeys from Neo4j when the page loads (for results table only)
+// Fetch storeys/types from Neo4j when the page loads or the Results tab
+// is opened (for the Results tab filters). Both are graph-backed, so they
+// only reflect data after a successful /ingest, unlike the Pipeline tab's
+// storey/type dropdowns (which read the source IFC file directly).
 async function loadStoreys() {
     try {
         const response = await fetch('/api/filters/storeys');
         const data = await response.json();
-        
+
         const resultStoreySelect = document.getElementById('storeyFilter');
-        const ingestStoreySelect = document.getElementById('ingestStoreyFilter');
-        
-        if (resultStoreySelect) resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
-        if (ingestStoreySelect) ingestStoreySelect.innerHTML = '<option value="">All Storeys (Leave empty)</option>';
-        
-        if (data.storeys) {
-            data.storeys.forEach(storey => {
-                if (resultStoreySelect) {
-                    const opt1 = document.createElement('option');
-                    opt1.value = storey;
-                    opt1.textContent = storey;
-                    resultStoreySelect.appendChild(opt1);
-                }
-                
-                if (ingestStoreySelect) {
-                    const opt2 = document.createElement('option');
-                    opt2.value = storey;
-                    opt2.textContent = storey;
-                    ingestStoreySelect.appendChild(opt2);
-                }
+        if (resultStoreySelect) {
+            const previous = resultStoreySelect.value;
+            resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
+            (data.storeys || []).forEach(storey => {
+                const opt = document.createElement('option');
+                opt.value = storey;
+                opt.textContent = storey;
+                resultStoreySelect.appendChild(opt);
             });
+            if (previous && (data.storeys || []).includes(previous)) {
+                resultStoreySelect.value = previous;
+            }
         }
     } catch (error) {
         console.error("Failed to load storeys:", error);
     }
+}
+
+async function loadTypes() {
+    try {
+        const response = await fetch('/api/filters/types');
+        const data = await response.json();
+
+        const resultTypeSelect = document.getElementById('typeFilter');
+        if (resultTypeSelect) {
+            const previouslySelected = new Set(
+                Array.from(resultTypeSelect.selectedOptions).map((opt) => opt.value)
+            );
+            resultTypeSelect.innerHTML = '';
+            (data.types || []).forEach(type => {
+                const opt = document.createElement('option');
+                opt.value = type;
+                opt.textContent = type;
+                if (previouslySelected.has(type)) opt.selected = true;
+                resultTypeSelect.appendChild(opt);
+            });
+        }
+    } catch (error) {
+        console.error("Failed to load types:", error);
+    }
+}
+
+// ------------------------------------------------------------------
+// Pipeline form: upload an IFC file, then populate its storey/type
+// filters. Nothing is scanned until the user picks a file — no more
+// scanning the whole dataset/ifc/ directory up front.
+// ------------------------------------------------------------------
+
+function populateIngestFilterSelects(data) {
+    const rescanBtn = document.getElementById('rescan-dataset-btn');
+
+    const storeyOptions = (data.storeys || []).map(storey => ({ value: storey, label: storey }));
+    ingestStoreyDropdown.setOptions(storeyOptions);
+
+    const typeOptions = (data.types || []).map(({ type, count }) => ({ value: type, label: type, count }));
+    ingestTypeDropdown.setOptions(typeOptions);
+
+    if (rescanBtn) rescanBtn.disabled = false;
+
+    if (data.errors && data.errors.length > 0) {
+        data.errors.forEach(e => console.warn("IFC filters:", e));
+    }
+}
+
+function resetIngestFilterSelects(placeholder) {
+    const rescanBtn = document.getElementById('rescan-dataset-btn');
+
+    ingestStoreyDropdown.disable(placeholder);
+    ingestTypeDropdown.disable(placeholder);
+
+    if (rescanBtn) rescanBtn.disabled = true;
+}
+
+async function uploadIfcFile(file) {
+    if (!file.name.toLowerCase().endsWith(".ifc")) {
+        logError("IFC upload failed", "Only .ifc files are accepted.");
+        return;
+    }
+
+    ifcDropZoneFile.textContent = `${file.name} — uploading...`;
+    ifcDropZone.classList.add("has-file");
+    resetIngestFilterSelects("Scanning file...");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        const response = await fetch("/api/ifc/upload", { method: "POST", body: formData });
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(data.detail || `${response.status} ${response.statusText}`);
+        }
+
+        ifcPathHidden.value = data.ifc_path;
+        ifcDropZoneFile.textContent = data.filename;
+        populateIngestFilterSelects(data);
+        logSuccess("IFC file uploaded", [`${data.filename} — ${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
+    } catch (err) {
+        ifcPathHidden.value = "";
+        ifcDropZoneFile.textContent = `${file.name} — upload failed`;
+        ifcDropZone.classList.remove("has-file");
+        resetIngestFilterSelects("Select an IFC file first");
+        logError("IFC upload failed", err.message || err);
+    }
+}
+
+async function rescanCurrentIfcFile() {
+    const ifcPath = ifcPathHidden.value;
+    if (!ifcPath) return;
+
+    const rescanBtn = document.getElementById('rescan-dataset-btn');
+    if (rescanBtn) rescanBtn.disabled = true;
+
+    try {
+        const url = `/api/filters/dataset?refresh=true&ifc_path=${encodeURIComponent(ifcPath)}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        populateIngestFilterSelects(data);
+        if (data.errors && data.errors.length > 0) {
+            logError("Rescan finished with issues", data.errors);
+        } else {
+            logSuccess("Rescanned IFC file", [`${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
+        }
+    } catch (err) {
+        logError("Rescan failed", err.message || err);
+    } finally {
+        if (rescanBtn) rescanBtn.disabled = false;
+    }
+}
+
+ifcDropZone.addEventListener("click", () => ifcFileInput.click());
+
+ifcFileInput.addEventListener("change", () => {
+    if (ifcFileInput.files && ifcFileInput.files[0]) {
+        uploadIfcFile(ifcFileInput.files[0]);
+    }
+});
+
+["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+    ifcDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    });
+});
+
+["dragenter", "dragover"].forEach((eventName) => {
+    ifcDropZone.addEventListener(eventName, () => ifcDropZone.classList.add("dragover"));
+});
+
+["dragleave", "drop"].forEach((eventName) => {
+    ifcDropZone.addEventListener(eventName, () => ifcDropZone.classList.remove("dragover"));
+});
+
+ifcDropZone.addEventListener("drop", (e) => {
+    const files = e.dataTransfer.files;
+    if (files && files[0] && files[0].name.toLowerCase().endsWith(".ifc")) {
+        const dt = new DataTransfer();
+        dt.items.add(files[0]);
+        ifcFileInput.files = dt.files;
+        uploadIfcFile(files[0]);
+    } else {
+        logError("IFC upload failed", "Only .ifc files are accepted.");
+    }
+});
+
+const rescanDatasetBtn = document.getElementById('rescan-dataset-btn');
+if (rescanDatasetBtn) {
+    rescanDatasetBtn.addEventListener('click', rescanCurrentIfcFile);
 }
 
 // Handle clicking "Apply Filters" on the Results table
@@ -719,15 +1041,34 @@ if (applyBtn) {
     applyBtn.addEventListener('click', () => {
         const storeySelect = document.getElementById('storeyFilter');
         currentStoreyFilter = storeySelect ? storeySelect.value : "";
-        
+
         const typeSelect = document.getElementById('typeFilter');
-        if (typeSelect) {
-            currentTypesFilter = Array.from(typeSelect.selectedOptions).map(opt => opt.value);
-        }
-        
+        currentTypesFilter = typeSelect
+            ? Array.from(typeSelect.selectedOptions).map(opt => opt.value)
+            : [];
+
+        loadResults();
+    });
+}
+
+// Handle clicking "Clear" on the Results table filters
+const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+if (clearFiltersBtn) {
+    clearFiltersBtn.addEventListener('click', () => {
+        const storeySelect = document.getElementById('storeyFilter');
+        if (storeySelect) storeySelect.value = "";
+
+        const typeSelect = document.getElementById('typeFilter');
+        if (typeSelect) Array.from(typeSelect.options).forEach(opt => (opt.selected = false));
+
+        currentStoreyFilter = "";
+        currentTypesFilter = [];
+
         loadResults();
     });
 }
 
 // Run this when the script loads
-loadStoreys();
+loadStoreys();  // Results tab storey filter (Neo4j-backed)
+loadTypes();    // Results tab type filter (Neo4j-backed)
+// Pipeline tab storey/type filters populate on IFC upload, not on page load — see uploadIfcFile().

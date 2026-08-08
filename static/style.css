@@ -258,6 +258,24 @@ button:disabled {
   background: var(--surface);
 }
 
+.drop-zone.has-file {
+  border-style: solid;
+  border-color: var(--border);
+}
+
+.drop-zone .hidden-input {
+  display: none;
+}
+
+.drop-zone .file-name {
+  margin: 0.5rem 0 0;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+  color: var(--fg);
+  font-weight: bold;
+  word-break: break-all;
+}
+
 .drop-zone-text {
   margin: 0;
   font-style: italic;
@@ -658,4 +676,190 @@ footer {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--fg-muted);
+}
+/* --- Inline "rescan dataset" button inside a .hint line --- */
+.btn-icon-text {
+  display: inline;
+  align-self: auto;
+  margin-left: 0.5rem;
+  padding: 0;
+  font-family: "Courier New", monospace;
+  font-size: 0.78rem;
+  text-transform: none;
+  letter-spacing: 0;
+  background: none;
+  border: none;
+  color: var(--fg);
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.btn-icon-text:hover {
+  background: none;
+  color: var(--fg-muted);
+}
+
+.btn-icon-text:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Modern checkbox-dropdown multiselect --- */
+.multiselect {
+  position: relative;
+}
+
+.multiselect-toggle {
+  align-self: auto;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.multiselect-toggle:hover {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.multiselect-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--surface);
+}
+
+.multiselect-toggle-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.multiselect-caret {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.multiselect.open .multiselect-toggle {
+  border-bottom-color: var(--bg);
+}
+
+.multiselect.open .multiselect-caret {
+  transform: rotate(180deg);
+}
+
+.multiselect-panel {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 3px 3px 0 rgba(17, 17, 17, 0.08);
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.multiselect-panel.hidden {
+  display: none;
+}
+
+.multiselect-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-light);
+  flex-wrap: wrap;
+}
+
+.multiselect-search {
+  flex: 1 1 100%;
+  font-family: "Courier New", monospace;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  color: var(--fg);
+  order: -1;
+}
+
+.multiselect-search:focus {
+  outline: 2px solid var(--border);
+}
+
+.multiselect-action {
+  align-self: auto;
+  background: none;
+  color: var(--fg-muted);
+  border: none;
+  padding: 0.15rem 0;
+  font-family: "Courier New", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.multiselect-action:hover {
+  color: var(--fg);
+  background: none;
+}
+
+.multiselect-options {
+  overflow-y: auto;
+  padding: 0.25rem 0;
+}
+
+.multiselect-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.multiselect-option:hover {
+  background: var(--surface);
+}
+
+.multiselect-option input[type="checkbox"] {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+}
+
+.multiselect-option .option-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multiselect-option .option-count {
+  color: var(--fg-light);
+  font-family: "Courier New", monospace;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.multiselect-empty {
+  padding: 0.6rem 0.75rem;
+  color: var(--fg-light);
+  font-style: italic;
+  font-size: 0.82rem;
 }

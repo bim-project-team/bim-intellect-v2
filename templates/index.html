@@ -102,35 +102,56 @@
           <div class="card-body">
             <form id="ingest-form">
               <div class="form-group">
-                <label for="ifc_path">IFC File Path</label>
-                <input type="text" id="ifc_path" name="ifc_path" value="dataset/ifc/Duplex.ifc" required />
-                <p class="hint">Absolute or relative path to the .ifc file on the server.</p>
+                <label>IFC File</label>
+                <div class="drop-zone" id="ifc-drop-zone">
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; color: var(--border-color);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  <p>Drag & drop an .ifc file here or <strong>click to browse</strong></p>
+                  <input type="file" id="ifc-file" accept=".ifc" class="hidden-input" />
+                  <p id="ifc-drop-zone-file" class="file-name"></p>
+                </div>
+                <input type="hidden" id="ifc_path" name="ifc_path" value="" required />
+                <p id="ifc-upload-hint" class="hint">Uploaded to dataset/ifc/ on the server, then scanned for its storeys and types.</p>
               </div>
 
-              <!-- Only changing Pipeline inputs to select as requested -->
+              <!-- Modern checkbox-dropdown multiselects -->
               <div class="form-group">
-                <label for="ingestStoreyFilter">Storey Filter (Optional)</label>
-                <select id="ingestStoreyFilter" name="storey" multiple class="modern-select">
-                  <option value="">Loading storeys...</option>
-                </select>
-                <p class="hint">Hold Ctrl (Windows) or Cmd (Mac) to select multiple. Leave empty for all.</p>
+                <label id="ingestStoreyFilterLabel">Storey Filter (Optional)</label>
+                <div class="multiselect" id="ingestStoreyFilter" aria-labelledby="ingestStoreyFilterLabel">
+                  <button type="button" class="multiselect-toggle" disabled>
+                    <span class="multiselect-toggle-label">Select an IFC file first</span>
+                    <svg class="multiselect-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <div class="multiselect-panel hidden">
+                    <div class="multiselect-panel-actions">
+                      <button type="button" class="multiselect-action" data-action="all">Select all</button>
+                      <button type="button" class="multiselect-action" data-action="none">Clear</button>
+                    </div>
+                    <div class="multiselect-options"></div>
+                  </div>
+                </div>
+                <p class="hint">Leave empty to include all storeys.</p>
               </div>
 
               <div class="form-group">
-                <label for="ingestTypeFilter">IFC Type Filter (Optional)</label>
-                <select id="ingestTypeFilter" name="type" multiple class="modern-select">
-                  <option value="IfcWall">IfcWall</option>
-                  <option value="IfcDoor">IfcDoor</option>
-                  <option value="IfcSlab">IfcSlab</option>
-                  <option value="IfcWindow">IfcWindow</option>
-                  <option value="IfcStair">IfcStair</option>
-                  <option value="IfcColumn">IfcColumn</option>
-                  <option value="IfcBeam">IfcBeam</option>
-                  <option value="IfcRoof">IfcRoof</option>
-                  <option value="IfcFurnishingElement">IfcFurnishingElement</option>
-                  <option value="IfcSpace">IfcSpace</option>
-                </select>
-                <p class="hint">Hold Ctrl (Windows) or Cmd (Mac) to select multiple. Leave empty for all.</p>
+                <label id="ingestTypeFilterLabel">IFC Type Filter (Optional)</label>
+                <div class="multiselect" id="ingestTypeFilter" aria-labelledby="ingestTypeFilterLabel">
+                  <button type="button" class="multiselect-toggle" disabled>
+                    <span class="multiselect-toggle-label">Select an IFC file first</span>
+                    <svg class="multiselect-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <div class="multiselect-panel hidden">
+                    <div class="multiselect-panel-actions">
+                      <input type="text" class="multiselect-search" placeholder="Filter types…" />
+                      <button type="button" class="multiselect-action" data-action="all">Select all</button>
+                      <button type="button" class="multiselect-action" data-action="none">Clear</button>
+                    </div>
+                    <div class="multiselect-options"></div>
+                  </div>
+                </div>
+                <p class="hint">
+                  Leave empty to include all types.
+                  <button type="button" id="rescan-dataset-btn" class="btn-icon-text" title="Rescan the selected IFC file for storeys and types" disabled>Rescan this file</button>
+                </p>
               </div>
 
               <div class="form-group checkbox-group">
@@ -162,7 +183,7 @@
             <div class="log-line log-muted">Idle. Run the pipeline to see activity here.</div>
           </div>
         </div>
-        
+
       </div>
     </section>
 
@@ -178,6 +199,23 @@
             <button class="tab-btn" data-target="violations">Clearance Violations</button>
             <button class="tab-btn" data-target="issues">All Issues</button>
             <button id="refresh-results-btn" class="btn-secondary ml-2">Refresh</button>
+          </div>
+        </div>
+        <div class="card-body results-filters" style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;padding-top:0;">
+          <div class="form-group" style="min-width:200px;">
+            <label for="storeyFilter">Storey</label>
+            <select id="storeyFilter">
+              <option value="">All Storeys</option>
+            </select>
+          </div>
+          <div class="form-group" style="min-width:220px;flex:1;">
+            <label for="typeFilter">IFC Type</label>
+            <select id="typeFilter" multiple size="1"></select>
+            <p class="hint">Ctrl/Cmd-click to select multiple. Leave empty for all types.</p>
+          </div>
+          <div class="form-group" style="display:flex;gap:0.5rem;">
+            <button type="button" id="applyFiltersBtn" class="btn-primary">Apply Filters</button>
+            <button type="button" id="clearFiltersBtn" class="btn-secondary">Clear</button>
           </div>
         </div>
         <div class="table-container card-body">
@@ -207,14 +245,14 @@
          ========================================== -->
     <section id="tab-corpus" class="tab-content">
       <div class="split-layout">
-        
+
         <!-- Left: Upload Form -->
         <div class="card form-card">
           <div class="card-header">
             <h2>Add Documents</h2>
             <p>Upload PDFs to embed and store in ChromaDB.</p>
           </div>
-          
+
           <div class="card-body">
             <form id="upload-form">
               <!-- Drag & Drop Zone -->
@@ -260,12 +298,12 @@
             </div>
           </div>
         </div>
-        
+
       </div>
     </section>
 
   </main>
 
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

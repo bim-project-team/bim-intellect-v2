@@ -4,19 +4,30 @@ __pycache__/
 .venv/
 venv/
 
+.idea/
+
+.notebooks/
+
 # Environment variables
 .env
 
 # Generated Graph Data
 nodes.csv
 edges.csv
+storeys.csv
+ifc_types.csv
 
 # IFC models and large datasets
 dataset/*.ifc
 dataset/*.zip
+*.ifc
 
 # ChromaDB
 chroma_db/
+
+# rag testing files
+rag/find_cluases.py
+rag/inspect_chroma.py
 
 # OS specific
 .DS_Store
