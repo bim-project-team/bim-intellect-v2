@@ -6,7 +6,7 @@ with a read-only clause (MATCH, RETURN, CALL, SHOW, WITH).
 
 import logging
 
-from openrouter_client import (
+from rag.openrouter_client import (
     CHAT_MODEL,
     LLMConfigError,
     LLMRequestError,

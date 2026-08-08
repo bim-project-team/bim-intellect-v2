@@ -14,8 +14,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from embedder import query_similar
-from openrouter_client import (
+from .embedder import query_similar
+from .openrouter_client import (
     CHAT_MODEL,
     LLMConfigError,
     LLMRequestError,
@@ -23,7 +23,7 @@ from openrouter_client import (
     get_client,
 )
 
-from rag.prompts import ROUTER_PROMPT, COMBINE_PROMPT
+from .prompts import ROUTER_PROMPT, COMBINE_PROMPT
 from bim_graph.graph_retriever import GraphRetriever
 
 logger = logging.getLogger("bim_intellect.orchestrator")
@@ -39,6 +39,44 @@ class RetrievalResult:
     def has_any_context(self) -> bool:
         return bool(self.vector_context or self.graph_context)
 
+def valid_source(source: dict) -> bool:
+    clause_id = str(source.get("clause_id", "")).strip().lower()
+    page_number = source.get("page_number")
+
+    return (
+        clause_id not in {"", "unknown", "none", "null"}
+        and page_number is not None
+    )
+
+
+
+def deduplicate_sources(sources: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+
+    for source in sources:
+        source_type = source.get("type", "regulation")
+
+        if source_type == "regulation":
+            key = (
+                "regulation",
+                source.get("clause_id"),
+                source.get("page_number"),
+            )
+        else:
+            key = (
+                source_type,
+                source.get("element_id") or source.get("id"),
+                source.get("name"),
+            )
+
+        if key not in seen:
+            seen.add(key)
+            result.append(source)
+
+    return result
+
+
 
 def _chat_callable(messages, model, temperature):
     """Factory for a zero-arg callable compatible with call_with_retries."""
@@ -52,27 +90,69 @@ def _chat_callable(messages, model, temperature):
     return _call
 
 
-def _format_vector_results(results: dict) -> tuple:
-    """Turn Chroma query result into citation-tagged context + source metadata."""
+def _format_vector_results(results: dict) -> tuple[str, list[dict]]:
+    """Turn Chroma results into citation-tagged context and valid metadata."""
     docs = results.get("documents") or [[]]
     metas = results.get("metadatas") or [[]]
+
     if not docs or not docs[0]:
         return "", []
 
     blocks = []
     sources = []
+
     for doc, meta in zip(docs[0], metas[0]):
-        clause_id = meta.get("clause_id", "unknown")
-        page_number = meta.get("page_number", "unknown")
-        blocks.append(f"[Clause {clause_id}, Page {page_number}] {doc}")
+        meta = meta or {}
+
+        clause_id = str(meta.get("clause_id", "")).strip()
+        page_number = meta.get("page_number")
+
+        # Never expose unverifiable regulatory citations.
+        if not clause_id or clause_id.lower() in {
+            "unknown",
+            "none",
+            "null",
+        }:
+            logger.warning(
+                "Skipping chunk with invalid clause_id: %r",
+                meta,
+            )
+            continue
+
+        if page_number is None:
+            logger.warning(
+                "Skipping chunk with missing page_number: %r",
+                meta,
+            )
+            continue
+
+        blocks.append(
+            f"[Clause {clause_id}, Page {page_number}] {doc}"
+        )
+
         sources.append({
             "type": "regulation",
             "source": meta.get("source", "Mabhas 15"),
             "clause_id": clause_id,
             "page_number": page_number,
         })
-    return "\n\n".join(blocks), sources
 
+    return "\n\n".join(blocks), deduplicate_sources(sources)
+
+def filter_sources(sources: list[dict]) -> list[dict]:
+    valid = []
+
+    for source in sources:
+        source_type = source.get("type", "regulation")
+
+        if source_type == "regulation":
+            if valid_source(source):
+                valid.append(source)
+        else:
+            # Preserve graph/element citations for BIM traceability.
+            valid.append(source)
+
+    return deduplicate_sources(valid)
 
 class RAGOrchestrator:
     """End-to-end RAG with automatic routing between vector and graph sources."""
@@ -158,16 +238,23 @@ class RAGOrchestrator:
             )
 
         prompt = COMBINE_PROMPT.format(
-            vector_context=retrieval.vector_context or "No regulatory context retrieved.",
-            graph_context=retrieval.graph_context or "No building graph context retrieved.",
-            question=question
+            vector_context=(
+                retrieval.vector_context
+                or "No regulatory context retrieved."
+            ),
+            graph_context=(
+                retrieval.graph_context
+                or "No building graph context retrieved."
+            ),
+            question=question,
         )
 
         messages = [{"role": "user", "content": prompt}]
+
         try:
             response = call_with_retries(
-                _chat_callable(messages, CHAT_MODEL, 0.3),
-                op_name="final answer generation"
+                _chat_callable(messages, CHAT_MODEL, 0.0),
+                op_name="final answer generation",
             )
             return response.choices[0].message.content or ""
         except (LLMRequestError, LLMConfigError) as exc:
@@ -180,6 +267,8 @@ class RAGOrchestrator:
             raise ValueError("Question cannot be empty.")
 
         retrieval = self.retrieve(question)
+        retrieval.sources = filter_sources(retrieval.sources)
+
         answer = self.generate(question, retrieval)
 
         return {

@@ -13,8 +13,8 @@ import os
 
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
-from chunker import Chunk, chunk_pdf
-from openrouter_client import (
+from .chunker import Chunk, chunk_pdf, normalize_persian_text
+from .openrouter_client import (
     EMBEDDING_MODEL,
     LLMConfigError,
     LLMRequestError,
@@ -130,7 +130,13 @@ def query_similar(query_text: str, n_results: int = 5):
                 "Collection '%s' is empty - has embed_and_store() been run yet?",
                 COLLECTION_NAME,
             )
-        return collection.query(query_texts=[query_text], n_results=n_results)
+        normalized_query = normalize_persian_text(query_text)
+
+        return collection.query(
+            query_texts=[normalized_query],
+            n_results=n_results,
+        )
+
     except (LLMConfigError, LLMRequestError):
         raise
     except Exception as exc:

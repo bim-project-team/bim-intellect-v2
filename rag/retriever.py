@@ -15,8 +15,8 @@ rather than drifting from stale context.
 import json
 from dataclasses import dataclass, field
 
-from embedder import query_similar
-from openrouter_client import (
+from .embedder import query_similar
+from .openrouter_client import (
     CHAT_MODEL,
     LLMConfigError,
     LLMRequestError,
@@ -27,9 +27,15 @@ from openrouter_client import (
 
 SYSTEM_PROMPT = """You are a regulatory compliance assistant for building code Mabhas 15
 (elevators and escalators). Answer ONLY using the provided context chunks.
-Every factual claim MUST cite its source in the format [Clause X.X, Page Y],
-using exactly the clause number and page number given in the context block
-for that chunk (each context block is already tagged like "[Clause X.X, Page Y]").
+Every factual claim MUST cite its source in the format
+[Clause CLAUSE_ID, Page PAGE_NUMBER].
+
+Use exactly the clause ID and page number from the context block.
+For example:
+[Clause 15-2-1-11, Page 21]
+
+Never convert, reverse, or invent a clause ID.
+Never cite a source whose clause ID is "unknown" or whose page number is "unknown".
 If the context does not contain a clear answer, say so explicitly instead of guessing.
 Never invent a clause number or page number that is not present in the provided context."""
 
@@ -38,20 +44,34 @@ NO_CONTEXT_ANSWER = (
     "to that question. Try rephrasing, or confirm the right document has "
     "been ingested via embedder.py."
 )
+def _valid_source(meta: dict) -> bool:
+    clause_id = str(meta.get("clause_id", "")).strip()
+    page_number = meta.get("page_number")
 
+    return (
+        clause_id
+        and clause_id.lower() != "unknown"
+        and page_number not in (None, "", "unknown")
+    )
 
 def build_context(results: dict) -> str:
-    """Turn a Chroma query result into a citation-tagged context block.
-    Returns "" if nothing was retrieved (empty collection, no matches)."""
+    """Build context using only chunks with verifiable citations."""
     docs = results.get("documents") or [[]]
     metas = results.get("metadatas") or [[]]
+
     if not docs or not docs[0]:
         return ""
+
     blocks = []
+
     for doc, meta in zip(docs[0], metas[0]):
-        clause = meta.get("clause_id", "unknown")
-        page = meta.get("page_number", "unknown")
+        if not _valid_source(meta):
+            continue
+
+        clause = meta["clause_id"]
+        page = meta["page_number"]
         blocks.append(f"[Clause {clause}, Page {page}] {doc}")
+
     return "\n\n".join(blocks)
 
 
@@ -110,7 +130,10 @@ class ChatSession:
         self._append_turn(question, answer)
         return {
             "answer": answer,
-            "sources": results["metadatas"][0],
+            "sources": [
+                meta for meta in results["metadatas"][0]
+                if _valid_source(meta)
+            ],
             "used_context": True,
         }
 
