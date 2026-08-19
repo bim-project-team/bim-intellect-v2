@@ -496,6 +496,7 @@ button:disabled {
   border: 1px solid var(--border-light);
   background: var(--bg);
   color: var(--fg-muted);
+  white-space: nowrap;
 }
 
 .chat-source-tag.regulation {

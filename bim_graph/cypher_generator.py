@@ -6,7 +6,7 @@ with a read-only clause (MATCH, RETURN, CALL, SHOW, WITH).
 
 import logging
 
-from openrouter_client import (
+from rag.openrouter_client import (
     CHAT_MODEL,
     LLMConfigError,
     LLMRequestError,
@@ -78,5 +78,10 @@ class CypherGenerator:
                 f"Query was: {cypher[:200]}..."
             )
 
-        logger.debug("Generated Cypher: %s", cypher[:200])
+        # INFO (not DEBUG): the generated query is the single most useful
+        # piece of information when a graph question returns unexpected
+        # results. Keeping this hidden behind DEBUG turns a one-query
+        # diagnosis into a multi-step manual investigation - it should be
+        # visible in normal logs, not opt-in.
+        logger.info("Generated Cypher: %s", cypher[:300])
         return cypher

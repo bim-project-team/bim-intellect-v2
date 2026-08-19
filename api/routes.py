@@ -78,9 +78,6 @@ class QuestionRequest(BaseModel):
 # RAG module discovery
 # ------------------------------------------------------------------
 
-_RAG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rag")
-if _RAG_DIR not in sys.path:
-    sys.path.insert(0, _RAG_DIR)
 
 _RAG_CHUNKER = None
 _RAG_EMBEDDER = None
@@ -98,7 +95,7 @@ def _ensure_rag():
 
     if _RAG_CHUNKER is None:
         try:
-            from chunker import chunk_pdf as _chunk_pdf
+            from rag.chunker import chunk_pdf as _chunk_pdf
             _RAG_CHUNKER = _chunk_pdf
         except Exception as exc:
             _RAG_IMPORT_ERROR = f"chunker import failed: {exc}"
@@ -106,11 +103,11 @@ def _ensure_rag():
 
     if _RAG_EMBEDDER is None:
         try:
-            from embedder import embed_and_store as _embed_and_store
-            from embedder import get_client_db as _get_client_db
-            from embedder import get_or_create_collection as _get_or_create_collection
-            from embedder import CHROMA_DIR as _CHROMA_DIR
-            from embedder import COLLECTION_NAME as _COLLECTION_NAME
+            from rag.embedder import embed_and_store as _embed_and_store
+            from rag.embedder import get_client_db as _get_client_db
+            from rag.embedder import get_or_create_collection as _get_or_create_collection
+            from rag.embedder import CHROMA_DIR as _CHROMA_DIR
+            from rag.embedder import COLLECTION_NAME as _COLLECTION_NAME
             _RAG_EMBEDDER = {
                 "embed_and_store": _embed_and_store,
                 "get_client_db": _get_client_db,
@@ -124,7 +121,7 @@ def _ensure_rag():
 
     if _RAG_RETRIEVER is None:
         try:
-            from retriever import answer_question as _answer_question
+            from rag.retriever import answer_question as _answer_question
             _RAG_RETRIEVER = _answer_question
         except Exception as exc:
             _RAG_IMPORT_ERROR = f"retriever import failed: {exc}"
@@ -132,7 +129,7 @@ def _ensure_rag():
 
     if _RAG_ORCHESTRATOR is None:
         try:
-            from orchestrator import RAGOrchestrator as _RAGOrchestrator
+            from rag.orchestrator import RAGOrchestrator as _RAGOrchestrator
             _RAG_ORCHESTRATOR = _RAGOrchestrator
         except Exception as exc:
             _RAG_IMPORT_ERROR = f"orchestrator import failed: {exc}"
