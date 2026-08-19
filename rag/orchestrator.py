@@ -30,6 +30,66 @@ from bim_graph.graph_retriever import GraphRetriever
 logger = logging.getLogger("bim_intellect.orchestrator")
 
 
+# These terms express an explicit request to use the uploaded document corpus.
+# Keep this small and high-confidence: the LLM still handles semantic routing,
+# while this guard prevents document requests from being dismissed as meta-chat.
+_VECTOR_REQUEST_PATTERNS = (
+    r"\bpdfs?\b",
+    r"\buploaded\s+(?:document|file|pdf)\b",
+    r"\b(?:this|the)\s+(?:document|file|source|corpus)\b",
+    r"\bdocument\s+(?:corpus|knowledge|text)\b",
+    r"\bextract(?:ed|ion)?\s+(?:knowledge|text|content)\b",
+    r"\b(?:summari[sz]e|summary)\s+(?:of\s+)?(?:this|the|an?)?\s*(?:document|file|pdf)\b",
+    r"(?:پی[‌\- ]?دی[‌\- ]?اف|سند\s+(?:بارگذاری|آپلود)\s*شده|فایل\s+(?:بارگذاری|آپلود)\s*شده)",
+)
+
+
+def explicitly_requests_vector_context(question: str) -> bool:
+    """Return True when the user directly refers to PDF/vector knowledge."""
+    return any(
+        re.search(pattern, question, flags=re.IGNORECASE)
+        for pattern in _VECTOR_REQUEST_PATTERNS
+    )
+
+
+def apply_routing_policy(question: str, decision: dict) -> dict:
+    """Apply conservative, source-aware safeguards to an LLM decision.
+
+    Technical intent is classified semantically by the LLM. The fallback only
+    resolves the unsafe combination where a technical question was assigned to
+    neither source; it deliberately does not broaden graph routing.
+    """
+    routed = dict(decision)
+    routed.setdefault("needs_vector", True)
+    routed.setdefault("needs_graph", True)
+    routed.setdefault("is_technical", False)
+    routed.setdefault("confidence", None)
+    routed.setdefault("reasoning", "No routing explanation was provided.")
+
+    for key in ("needs_vector", "needs_graph", "is_technical"):
+        if not isinstance(routed[key], bool):
+            raise ValueError(f"Router field {key!r} must be a boolean.")
+
+    if explicitly_requests_vector_context(question) and not routed["needs_vector"]:
+        routed["needs_vector"] = True
+        routed["reasoning"] = (
+            "Vector retrieval required because the question explicitly "
+            "refers to uploaded PDF/document knowledge."
+        )
+    elif (
+        routed["is_technical"]
+        and not routed["needs_vector"]
+        and not routed["needs_graph"]
+    ):
+        routed["needs_vector"] = True
+        routed["reasoning"] = (
+            "Technical or engineering question assigned to neither source; "
+            "conservatively searching the regulation corpus."
+        )
+
+    return routed
+
+
 @dataclass
 class RetrievalResult:
     vector_context: Optional[str] = None
@@ -40,6 +100,7 @@ class RetrievalResult:
     def has_any_context(self) -> bool:
         return bool(self.vector_context or self.graph_context)
 
+
 def valid_source(source: dict) -> bool:
     clause_id = str(source.get("clause_id", "")).strip().lower()
     page_number = source.get("page_number")
@@ -48,7 +109,6 @@ def valid_source(source: dict) -> bool:
         clause_id not in {"", "unknown", "none", "null"}
         and page_number is not None
     )
-
 
 
 def deduplicate_sources(sources: list[dict]) -> list[dict]:
@@ -78,7 +138,6 @@ def deduplicate_sources(sources: list[dict]) -> list[dict]:
     return result
 
 
-
 def _chat_callable(messages, model, temperature):
     """Factory for a zero-arg callable compatible with call_with_retries."""
     def _call():
@@ -91,8 +150,16 @@ def _chat_callable(messages, model, temperature):
     return _call
 
 
-def _format_vector_results(results: dict) -> tuple[str, list[dict]]:
-    """Turn Chroma results into citation-tagged context and valid metadata."""
+def _format_vector_results(results: dict, max_results: int | None = None) -> tuple[str, list[dict]]:
+    """Turn Chroma results into citation-tagged context and valid metadata.
+
+    `results` may contain more candidates than were originally requested
+    (embedder.query_similar overfetches beyond n_results so downstream
+    filtering of invalid/unlabeled chunks doesn't starve the context - see
+    its docstring). This only includes the first `max_results` valid
+    (citable) chunks, stopping early once that many are found. Pass
+    max_results=None to include every valid chunk in `results`.
+    """
     docs = results.get("documents") or [[]]
     metas = results.get("metadatas") or [[]]
 
@@ -107,6 +174,14 @@ def _format_vector_results(results: dict) -> tuple[str, list[dict]]:
 
         clause_id = str(meta.get("clause_id", "")).strip()
         page_number = meta.get("page_number")
+        # embedder.py now always writes a "source" field per chunk (the
+        # PDF/document a chunk came from). The "Unknown source" fallback
+        # here only covers data embedded before that field existed - it
+        # replaces the previous hardcoded default of "Mabhas 15", which
+        # silently mislabeled every chunk missing this field (including
+        # ones from other documents) as Mabhas 15 instead of surfacing
+        # that the source was actually missing.
+        source = str(meta.get("source", "")).strip() or "Unknown source"
 
         # Never expose unverifiable regulatory citations.
         if not clause_id or clause_id.lower() in {
@@ -133,12 +208,16 @@ def _format_vector_results(results: dict) -> tuple[str, list[dict]]:
 
         sources.append({
             "type": "regulation",
-            "source": meta.get("source", "Mabhas 15"),
+            "source": source,
             "clause_id": clause_id,
             "page_number": page_number,
         })
 
+        if max_results is not None and len(blocks) >= max_results:
+            break
+
     return "\n\n".join(blocks), deduplicate_sources(sources)
+
 
 def filter_sources(sources: list[dict]) -> list[dict]:
     valid = []
@@ -154,6 +233,8 @@ def filter_sources(sources: list[dict]) -> list[dict]:
             valid.append(source)
 
     return deduplicate_sources(valid)
+
+
 CITATION_PATTERN = re.compile(
     r"(?:\[)?Clause\s+([0-9]+(?:-[0-9]+)+)"
     r"\s*,?\s*Page\s+([0-9]+)(?:\])?",
@@ -203,6 +284,7 @@ def validate_generated_answer(
 
     return True
 
+
 def sources_used_by_answer(
     answer: str,
     sources: list[dict],
@@ -221,6 +303,7 @@ def sources_used_by_answer(
             str(source.get("page_number", "")).strip(),
         ) in cited
     ]
+
 
 class RAGOrchestrator:
     """End-to-end RAG with automatic routing between vector and graph sources."""
@@ -242,16 +325,18 @@ class RAGOrchestrator:
             )
             content = response.choices[0].message.content.strip()
             decision = json.loads(content)
-        except (json.JSONDecodeError, LLMRequestError, LLMConfigError) as exc:
+            if not isinstance(decision, dict):
+                raise ValueError("Router response was not a JSON object.")
+            decision = apply_routing_policy(question, decision)
+        except (json.JSONDecodeError, ValueError, LLMRequestError, LLMConfigError) as exc:
             logger.warning("Router failed (%s) — falling back to both sources.", exc)
             decision = {
                 "needs_vector": True,
                 "needs_graph": True,
+                "is_technical": True,
+                "confidence": 0.0,
                 "reasoning": f"Fallback due to error: {exc}"
             }
-
-        decision.setdefault("needs_vector", True)
-        decision.setdefault("needs_graph", True)
         return decision
 
     def retrieve(self, question: str) -> RetrievalResult:
@@ -260,16 +345,20 @@ class RAGOrchestrator:
         result = RetrievalResult()
 
         logger.info(
-            "Router decision: vector=%s graph=%s | %s",
+            "Router decision: vector=%s graph=%s confidence=%s | %s",
             decision["needs_vector"], decision["needs_graph"],
+            decision.get("confidence", "n/a"),
             decision.get("reasoning", "")
         )
 
         # 2a) Vector / Regulation path
         if decision.get("needs_vector"):
             try:
+                # query_similar overfetches beyond n_results internally;
+                # _format_vector_results caps back down to n_results after
+                # filtering out invalid/unlabeled chunks, not before.
                 chroma_results = query_similar(question, n_results=self.n_results)
-                context, sources = _format_vector_results(chroma_results)
+                context, sources = _format_vector_results(chroma_results, max_results=self.n_results)
                 if context:
                     result.vector_context = context
                     result.sources.extend(sources)
