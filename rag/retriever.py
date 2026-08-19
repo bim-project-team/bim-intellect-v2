@@ -44,6 +44,8 @@ NO_CONTEXT_ANSWER = (
     "to that question. Try rephrasing, or confirm the right document has "
     "been ingested via embedder.py."
 )
+
+
 def _valid_source(meta: dict) -> bool:
     clause_id = str(meta.get("clause_id", "")).strip()
     page_number = meta.get("page_number")
@@ -54,8 +56,16 @@ def _valid_source(meta: dict) -> bool:
         and page_number not in (None, "", "unknown")
     )
 
-def build_context(results: dict) -> str:
-    """Build context using only chunks with verifiable citations."""
+
+def build_context(results: dict, max_results: int | None = None) -> str:
+    """Build context using only chunks with verifiable citations.
+
+    `results` may contain more candidates than were originally requested
+    (embedder.query_similar overfetches - see its docstring), so this
+    only includes the first `max_results` *valid* chunks rather than
+    every candidate returned, and stops early once that many are found.
+    Pass max_results=None to include every valid chunk in `results`.
+    """
     docs = results.get("documents") or [[]]
     metas = results.get("metadatas") or [[]]
 
@@ -72,7 +82,26 @@ def build_context(results: dict) -> str:
         page = meta["page_number"]
         blocks.append(f"[Clause {clause}, Page {page}] {doc}")
 
+        if max_results is not None and len(blocks) >= max_results:
+            break
+
     return "\n\n".join(blocks)
+
+
+def _valid_sources_capped(results: dict, max_results: int | None) -> list[dict]:
+    docs = results.get("documents") or [[]]
+    metas = results.get("metadatas") or [[]]
+    if not docs or not docs[0]:
+        return []
+
+    out = []
+    for meta in metas[0]:
+        if not _valid_source(meta):
+            continue
+        out.append(meta)
+        if max_results is not None and len(out) >= max_results:
+            break
+    return out
 
 
 @dataclass
@@ -98,9 +127,12 @@ class ChatSession:
             raise LLMRequestError("Question was empty.")
 
         # --- Retrieval (raises LLMConfigError/LLMRequestError on failure -
-        # let it propagate; there's nothing useful to answer without it) ---
+        # let it propagate; there's nothing useful to answer without it).
+        # query_similar overfetches beyond n_results internally, so we cap
+        # back down to n_results here, after invalid/unlabeled chunks have
+        # been filtered out - not before. ---
         results = query_similar(question, n_results=self.n_results)
-        context = build_context(results)
+        context = build_context(results, max_results=self.n_results)
 
         if not context:
             logger.info("No matching context found for question - skipping the LLM call.")
@@ -130,10 +162,7 @@ class ChatSession:
         self._append_turn(question, answer)
         return {
             "answer": answer,
-            "sources": [
-                meta for meta in results["metadatas"][0]
-                if _valid_source(meta)
-            ],
+            "sources": _valid_sources_capped(results, self.n_results),
             "used_context": True,
         }
 

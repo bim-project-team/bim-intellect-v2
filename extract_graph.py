@@ -278,7 +278,7 @@ def write_csvs(node_rows, edge_rows, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV):
         print(f"Dropped {dropped_edges} edge(s) referencing ids outside the extracted node set "
               f"(expected when storey_filter/type_filter narrows the extraction).", file=sys.stderr)
 
-    with open(nodes_csv, "w", newline="") as f:
+    with open(nodes_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "id", "type", "name", "storey_id", "storey_name",
             "min_x", "min_y", "min_z", "max_x", "max_y", "max_z",
@@ -286,7 +286,7 @@ def write_csvs(node_rows, edge_rows, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV):
         writer.writeheader()
         writer.writerows(node_rows)
 
-    with open(edges_csv, "w", newline="") as f:
+    with open(edges_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["source_id", "target_id", "rel_type"])
         writer.writerows(edge_rows)

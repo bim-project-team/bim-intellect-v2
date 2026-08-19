@@ -64,7 +64,11 @@ def _clean_value(v):
 
 
 def load_rows(path):
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path, encoding="utf-8")
+    except UnicodeDecodeError:
+        print(f"[load] {path} is not valid UTF-8, retrying as cp1252...", flush=True)
+        df = pd.read_csv(path, encoding="cp1252")
     records = df.to_dict("records")
     return [{k: _clean_value(v) for k, v in row.items()} for row in records]
 

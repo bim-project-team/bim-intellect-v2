@@ -10,10 +10,11 @@ instead of hitting api.openai.com directly. See openrouter_client.py for
 the shared client/retry setup.
 """
 import os
+from pathlib import Path
 
 import chromadb
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
-from .chunker import Chunk, chunk_pdf, normalize_persian_text
+from .chunker import Chunk, chunk_pdf_with_diagnostics, normalize_persian_text
 from .openrouter_client import (
     EMBEDDING_MODEL,
     LLMConfigError,
@@ -30,6 +31,14 @@ COLLECTION_NAME = "regulations"
 # request; batching keeps individual requests well within provider limits
 # and means one slow/failed batch doesn't require re-embedding everything.
 EMBED_BATCH_SIZE = int(os.getenv("OPENROUTER_EMBED_BATCH_SIZE", "96"))
+
+# How many extra candidates to fetch beyond n_results when querying Chroma.
+# Some stored chunks legitimately have clause_id="unknown" (front-matter/
+# TOC text kept for searchability but not citable - see chunker.py) and
+# get filtered out downstream by retriever.py/orchestrator.py. Overfetching
+# means that filtering doesn't silently starve the LLM of context just
+# because a few of the nearest neighbors happen to be unlabeled.
+DEFAULT_OVERFETCH_MULTIPLIER = int(os.getenv("OPENROUTER_OVERFETCH_MULTIPLIER", "3"))
 
 
 class OpenRouterEmbeddingFunction(EmbeddingFunction):
@@ -97,6 +106,12 @@ def embed_and_store(chunks: list[Chunk]) -> int:
             metadatas=[{
                 "page_number": c.page_number,
                 "clause_id": c.clause_id or "unknown",
+                # Previously never written here, so orchestrator.py's
+                # meta.get("source", "Mabhas 15") always silently fell back
+                # to that hardcoded default - for every chunk, from every
+                # document - instead of reflecting which PDF a chunk
+                # actually came from.
+                "source": c.source or "unknown",
             } for c in chunks],
         )
     except (LLMConfigError, LLMRequestError):
@@ -111,12 +126,21 @@ def embed_and_store(chunks: list[Chunk]) -> int:
     return len(chunks)
 
 
-def query_similar(query_text: str, n_results: int = 5):
+def query_similar(
+    query_text: str,
+    n_results: int = 5,
+    overfetch_multiplier: int = DEFAULT_OVERFETCH_MULTIPLIER,
+):
     """
-    Retrieve the n_results chunks most similar to query_text. Raises
-    LLMConfigError / LLMRequestError on embedding failure, or
-    LLMRequestError if Chroma's own query call fails (e.g. empty/missing
-    collection).
+    Retrieve chunks most similar to query_text. Fetches
+    n_results * overfetch_multiplier candidates from Chroma so that
+    callers filtering out unlabeled/unknown-source chunks (see
+    retriever.py's build_context / orchestrator.py's _format_vector_results)
+    can still assemble up to n_results usable, citable chunks instead of
+    silently ending up with fewer than requested whenever a few of the
+    nearest neighbors happen to be unlabeled. Raises LLMConfigError /
+    LLMRequestError on embedding failure, or LLMRequestError if Chroma's
+    own query call fails (e.g. empty/missing collection).
     """
     if not query_text or not query_text.strip():
         raise LLMRequestError("query_similar() called with an empty query.")
@@ -131,10 +155,11 @@ def query_similar(query_text: str, n_results: int = 5):
                 COLLECTION_NAME,
             )
         normalized_query = normalize_persian_text(query_text)
+        fetch_count = max(n_results * overfetch_multiplier, n_results)
 
         return collection.query(
             query_texts=[normalized_query],
-            n_results=n_results,
+            n_results=fetch_count,
         )
 
     except (LLMConfigError, LLMRequestError):
@@ -147,13 +172,20 @@ def main():
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python embedder.py <path-to-pdf>", file=sys.stderr)
+        print("Usage: python -m embedder <path-to-pdf> [doc_id] [source_label]", file=sys.stderr)
+        print("  doc_id        defaults to the PDF filename stem; used as the chunk_id prefix", file=sys.stderr)
+        print("  source_label  defaults to doc_id; shown in citations (e.g. 'Mabhas 4 - Stairs')", file=sys.stderr)
         sys.exit(1)
 
+    pdf_path = sys.argv[1]
+    doc_id = sys.argv[2] if len(sys.argv) > 2 else Path(pdf_path).stem
+    source = sys.argv[3] if len(sys.argv) > 3 else doc_id
+
     try:
-        chunks = chunk_pdf(sys.argv[1])
-        count = embed_and_store(chunks)
-        print(f"Embedded and stored {count} chunk(s) in Chroma at {CHROMA_DIR}")
+        result = chunk_pdf_with_diagnostics(pdf_path, doc_id=doc_id, source=source)
+        logger.info("Chunking diagnostics for %s:\n%s", pdf_path, result.summary())
+        count = embed_and_store(result.chunks)
+        print(f"Embedded and stored {count} chunk(s) (source={source!r}) in Chroma at {CHROMA_DIR}")
     except LLMConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -161,7 +193,7 @@ def main():
         print(f"Embedding failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except FileNotFoundError:
-        print(f"PDF not found: {sys.argv[1]}", file=sys.stderr)
+        print(f"PDF not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)
 
 
