@@ -129,18 +129,22 @@ class GraphRetriever:
                     label = list(value.labels)[0] if value.labels else "Element"
                     name = props.get("name", "Unnamed")
                     elem_id = props.get("id", "N/A")
+                    ifc_guid = props.get("ifcGuid", elem_id)
                     tag = props.get("tag")
                     ifc_type = props.get("ifcType", label)
-                    id_display = f"id={elem_id}" + (f", tag={tag}" if tag else "")
+                    id_display = f"id={elem_id}, ifcGuid={ifc_guid}" + (f", tag={tag}" if tag else "")
                     line_parts.append(
                         f"{key}={ifc_type}({id_display}, name={name})"
                     )
                     sources.append({
                         "type": "graph",
                         "element_id": elem_id,
+                        "ifc_guid": ifc_guid,
                         "tag": tag,
                         "name": name,
                         "ifc_type": ifc_type,
+                        "source_ifc_file": props.get("sourceIfcFile"),
+                        "project_id": props.get("projectId"),
                     })
 
                 elif hasattr(value, "type"):  # Neo4j Relationship object

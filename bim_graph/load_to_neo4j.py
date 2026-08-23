@@ -28,11 +28,17 @@ NODE_QUERY = """
 UNWIND $rows AS row
 MERGE (e:Element {id: row.id})
 SET e.ifcType     = row.type,
+    e.ifcGuid      = coalesce(row.ifc_guid, row.id),
     e.name         = row.name,
     e.storeyId     = row.storey_id,
     e.storeyName   = row.storey_name,
     e.minX = row.min_x, e.minY = row.min_y, e.minZ = row.min_z,
-    e.maxX = row.max_x, e.maxY = row.max_y, e.maxZ = row.max_z
+    e.maxX = row.max_x, e.maxY = row.max_y, e.maxZ = row.max_z,
+    e.sourceIfcFile = row.source_ifc_file,
+    e.sourceFileId = row.source_file_id,
+    e.discipline = row.discipline,
+    e.projectId = row.project_id,
+    e.coordinateSystemId = row.coordinate_system_id
 WITH e, row.type AS ifcType
 CALL apoc.create.addLabels(e, [ifcType]) YIELD node
 RETURN count(*)
@@ -54,6 +60,24 @@ CREATE CONSTRAINT element_id IF NOT EXISTS
 FOR (e:Element) REQUIRE e.id IS UNIQUE
 """
 
+PROJECT_MODEL_QUERY = """
+UNWIND $rows AS row
+MERGE (p:BIMProject {id: row.project_id})
+SET p.updatedAt = datetime()
+MERGE (m:IFCModel {id: row.project_id + '::' + row.source_file_id})
+SET m.filename = row.source_ifc_file,
+    m.sourceFileId = row.source_file_id,
+    m.projectId = row.project_id,
+    m.discipline = row.discipline,
+    m.coordinateSystemId = row.coordinate_system_id,
+    m.ingestedAt = datetime()
+MERGE (p)-[:HAS_MODEL]->(m)
+WITH m, row
+MATCH (e:Element {projectId: row.project_id, sourceFileId: row.source_file_id})
+MERGE (m)-[:HAS_ELEMENT]->(e)
+RETURN count(e)
+"""
+
 
 def _clean_value(v):
     """pandas gives NaN for empty CSV cells; Neo4j has no concept of NaN,
@@ -73,7 +97,7 @@ def load_rows(path):
     return [{k: _clean_value(v) for k, v in row.items()} for row in records]
 
 
-def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False):
+def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False, project_id=None):
     """
     Public entrypoint: load nodes_csv/edges_csv into Neo4j. Returns a
     summary dict so a caller (e.g. the FastAPI /ingest endpoint) can report
@@ -88,6 +112,16 @@ def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False):
             print(f"[load] reset=True — deleting all existing nodes/relationships...", flush=True)
             client.run("MATCH (n) DETACH DELETE n")
             print(f"[load] graph cleared.", flush=True)
+        elif project_id:
+            client.run(
+                "MATCH (e:Element {projectId: $project_id}) DETACH DELETE e",
+                {"project_id": project_id},
+            )
+            client.run(
+                "MATCH (p:BIMProject {id: $project_id})-[:HAS_MODEL]->(m:IFCModel) "
+                "DETACH DELETE m, p",
+                {"project_id": project_id},
+            )
 
         client.run(CONSTRAINT_QUERY)
 
@@ -95,14 +129,34 @@ def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False):
         nodes = load_rows(nodes_csv)
         print(f"[load] writing {len(nodes)} node(s) in batches of {BATCH_SIZE}...", flush=True)
         client.run_batched(NODE_QUERY, nodes, BATCH_SIZE)
+        model_rows = list({
+            (row.get("project_id"), row.get("source_file_id")): {
+                "project_id": row.get("project_id"),
+                "source_file_id": row.get("source_file_id"),
+                "source_ifc_file": row.get("source_ifc_file"),
+                "discipline": row.get("discipline"),
+                "coordinate_system_id": row.get("coordinate_system_id"),
+            }
+            for row in nodes
+            if row.get("project_id") and row.get("source_file_id")
+        }.values())
+        if model_rows:
+            client.run_batched(PROJECT_MODEL_QUERY, model_rows, BATCH_SIZE)
         print(f"[load] nodes written.", flush=True)
 
         print(f"[load] reading {edges_csv}...", flush=True)
         edges = load_rows(edges_csv)
         print(f"[load] writing {len(edges)} edge(s) in batches of {BATCH_SIZE}...", flush=True)
         client.run_batched(EDGE_QUERY, edges, BATCH_SIZE)
-        rel_count_after = client.run("MATCH ()-[r]->() RETURN count(r) AS n")[0]["n"]
-        print(f"[load] edges written — {rel_count_after} relationship(s) now in graph.", flush=True)
+        edge_types = sorted({row.get("rel_type") for row in edges if row.get("rel_type")})
+        rel_count_after = client.run(
+            "MATCH (a:Element)-[r]->(b:Element) "
+            "WHERE type(r) IN $edge_types "
+            "AND ($project_id IS NULL OR (a.projectId = $project_id AND b.projectId = $project_id)) "
+            "RETURN count(r) AS n",
+            {"edge_types": edge_types, "project_id": project_id},
+        )[0]["n"]
+        print(f"[load] edges written — {rel_count_after} selected graph relationship(s) now present.", flush=True)
 
         node_counts = client.run(
             "MATCH (e:Element) RETURN e.ifcType AS type, count(*) AS n ORDER BY n DESC"
@@ -122,6 +176,7 @@ def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False):
 
         return {
             "reset": reset,
+            "project_id": project_id,
             "nodes_attempted": len(nodes),
             "edges_attempted": len(edges),
             "relationships_in_graph": rel_count_after,

@@ -155,6 +155,9 @@ class MultiSelectDropdown {
 let activeTab = "clashes"; // for results sub-tabs
 let activeNav = "chat";    // for main navigation
 let selectedElementId = null;
+let selectedPdfFiles = [];
+let selectedIfcFileIds = new Set();
+let ifcProjects = [];
 
 // ------------------------------------------------------------------
 // DOM refs
@@ -167,6 +170,15 @@ const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatSend = document.getElementById("chat-send");
 const chatMeta = document.getElementById("chat-meta");
+const strongModelsToggle = document.getElementById("strong-models-toggle");
+const conversationStorageKey = "bim-intellect-conversation-id";
+let conversationId = sessionStorage.getItem(conversationStorageKey);
+if (!conversationId) {
+  conversationId = window.crypto && window.crypto.randomUUID
+    ? window.crypto.randomUUID()
+    : `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  sessionStorage.setItem(conversationStorageKey, conversationId);
+}
 
 const log = document.getElementById("log");
 const resultsBody = document.getElementById("results-body");
@@ -179,7 +191,8 @@ const ingestSubmitBtn = document.getElementById("ingest-submit");
 const ifcDropZone = document.getElementById("ifc-drop-zone");
 const ifcFileInput = document.getElementById("ifc-file");
 const ifcDropZoneFile = document.getElementById("ifc-drop-zone-file");
-const ifcPathHidden = document.getElementById("ifc_path");
+const projectIdInput = document.getElementById("project-id");
+const ifcModelList = document.getElementById("ifc-model-list");
 
 const ingestStoreyDropdown = new MultiSelectDropdown("ingestStoreyFilter", { emptyText: "No storeys found in this file" });
 const ingestTypeDropdown = new MultiSelectDropdown("ingestTypeFilter", { emptyText: "No types found in this file" });
@@ -216,6 +229,9 @@ navButtons.forEach((btn) => {
     // Auto-load corpus status when opening that tab
     if (target === "corpus") {
       loadCorpusStatus();
+    }
+    if (target === "pipeline") {
+      loadIfcProjects();
     }
 
     // Refresh Results tab filter options (Neo4j-backed) each time it's opened,
@@ -333,6 +349,8 @@ async function sendChat(question) {
     const payload = {
       question: question.trim(),
       selected_element_id: selectedElementId,
+      conversation_id: conversationId,
+      use_strong_models: Boolean(strongModelsToggle && strongModelsToggle.checked),
     };
 
     console.log("Sending /api/ask:", payload);
@@ -355,6 +373,10 @@ async function sendChat(question) {
     }
 
     hideTypingIndicator();
+    if (data.conversation_id) {
+      conversationId = data.conversation_id;
+      sessionStorage.setItem(conversationStorageKey, conversationId);
+    }
     appendChatMessage("assistant", data.answer || "(no answer)", data.sources);
 
     // Update sidebar
@@ -419,6 +441,24 @@ function updateChatMeta(data) {
     html += `</div>`;
   }
 
+  if (data.model_mode) {
+    const mode = escapeHtml(String(data.model_mode));
+    const routerModel = escapeHtml(String(data.router_model || ""));
+    const finalModel = escapeHtml(String(data.final_model || ""));
+    html += `<p class="hint" style="margin-top:0.75rem;">Model mode: <strong>${mode}</strong></p>`;
+    html += `<p class="hint">Router: ${routerModel}<br>Final: ${finalModel}</p>`;
+  }
+  const debug = data.retrieval_debug || {};
+  if (data.rewritten_query) {
+    html += `<p class="hint" style="margin-top:0.75rem;">Interpreted query:</p>`;
+    html += `<p class="chat-debug-query">${escapeHtml(String(data.rewritten_query))}</p>`;
+  }
+  if (debug.final_context_chunks !== undefined) {
+    html += `<p class="hint">Candidates: ${Number(debug.vector_candidates || 0)} · ` +
+      `Reranked: ${Number(debug.reranked_results || 0)} · ` +
+      `Context chunks: ${Number(debug.final_context_chunks || 0)}</p>`;
+  }
+
   chatMeta.innerHTML = html;
 }
 
@@ -439,16 +479,12 @@ document.querySelectorAll(".example-q").forEach((btn) => {
 // PDF Upload (drag & drop + click)
 // ------------------------------------------------------------------
 
-let selectedFile = null;
-
 dropZone.addEventListener("click", () => pdfFileInput.click());
 
 pdfFileInput.addEventListener("change", () => {
-  if (pdfFileInput.files && pdfFileInput.files[0]) {
-    selectedFile = pdfFileInput.files[0];
-    dropZoneFile.textContent = selectedFile.name;
-    dropZone.classList.add("has-file");
-  }
+  selectedPdfFiles = Array.from(pdfFileInput.files || []).filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+  renderSelectedFileNames(dropZoneFile, selectedPdfFiles);
+  dropZone.classList.toggle("has-file", selectedPdfFiles.length > 0);
 });
 
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -467,19 +503,25 @@ pdfFileInput.addEventListener("change", () => {
 });
 
 dropZone.addEventListener("drop", (e) => {
-  const files = e.dataTransfer.files;
-  if (files && files[0] && files[0].name.toLowerCase().endsWith(".pdf")) {
-    selectedFile = files[0];
-    dropZoneFile.textContent = selectedFile.name;
+  const files = Array.from(e.dataTransfer.files || []);
+  const valid = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+  if (valid.length > 0 && valid.length === files.length) {
+    selectedPdfFiles = valid;
+    renderSelectedFileNames(dropZoneFile, selectedPdfFiles);
     dropZone.classList.add("has-file");
-    // Sync to hidden input so form submission works
     const dt = new DataTransfer();
-    dt.items.add(selectedFile);
+    valid.forEach((item) => dt.items.add(item));
     pdfFileInput.files = dt.files;
   } else {
-    showUploadStatus("Only PDF files are accepted.", true);
+    showUploadStatus("Every selected file must be a PDF.", true);
   }
 });
+
+function renderSelectedFileNames(target, files) {
+  target.textContent = files.length
+    ? `${files.length} file(s): ${files.map((file) => file.name).join(", ")}`
+    : "";
+}
 
 function showUploadStatus(text, isError) {
   uploadStatusText.textContent = text;
@@ -493,22 +535,23 @@ function hideUploadStatus() {
 
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const file = pdfFileInput.files[0];
-  if (!file) {
-    showUploadStatus("Please select a PDF file first.", true);
+  const files = Array.from(pdfFileInput.files || []);
+  if (!files.length) {
+    showUploadStatus("Please select one or more PDF files first.", true);
     return;
   }
 
   uploadSubmit.disabled = true;
-  showUploadStatus("Uploading and embedding... please wait.");
+  showUploadStatus(`Processing ${files.length} PDF file(s)...`);
 
   const formData = new FormData();
-  formData.append("file", file);
+  files.forEach((item) => formData.append("files", item));
   const docId = document.getElementById("doc-id").value.trim();
-  if (docId) formData.append("doc_id", docId);
+  const uploadUrl = new URL("/api/rag/upload", window.location.origin);
+  if (docId && files.length === 1) uploadUrl.searchParams.set("doc_id", docId);
 
   try {
-    const response = await fetch("/api/rag/upload", {
+    const response = await fetch(uploadUrl, {
       method: "POST",
       body: formData,
     });
@@ -521,14 +564,16 @@ uploadForm.addEventListener("submit", async (e) => {
       return;
     }
 
-    showUploadStatus(
-      `Uploaded "${data.filename}" — ${data.chunks_extracted} chunk(s) extracted, ${data.chunks_stored} stored in ChromaDB.`,
-      false
-    );
+    const outcomes = data.files || [data];
+    const summary = outcomes.map((item) => item.status === "indexed"
+      ? `✓ ${item.filename}: ${item.chunks_stored} chunks indexed`
+      : `✗ ${item.filename}: ${item.error || "failed"}`
+    ).join("\n");
+    showUploadStatus(summary, Number(data.succeeded ?? 1) === 0);
 
     // Reset form
     pdfFileInput.value = "";
-    selectedFile = null;
+    selectedPdfFiles = [];
     dropZoneFile.textContent = "";
     dropZone.classList.remove("has-file");
     document.getElementById("doc-id").value = "";
@@ -560,19 +605,24 @@ async function loadCorpusStatus() {
     const count = data.document_count ?? "?";
     const collection = data.collection ?? "?";
     const dir = data.chroma_dir ?? "?";
-    const samples = data.sample_ids || [];
+    const documents = data.documents || [];
 
     let html = `
       <div class="stat-row"><span>Collection</span><span>${escapeHtml(collection)}</span></div>
-      <div class="stat-row"><span>Documents</span><span>${count}</span></div>
+      <div class="stat-row"><span>Indexed chunks</span><span>${count}</span></div>
+      <div class="stat-row"><span>Documents</span><span>${documents.length}</span></div>
       <div class="stat-row"><span>Storage</span><span>${escapeHtml(dir)}</span></div>
     `;
 
-    if (samples.length > 0) {
-      html += `<div class="stat-row" style="flex-direction:column;align-items:flex-start;gap:0.25rem;">
-        <span>Sample IDs:</span>
-        <span style="font-size:0.75rem;color:var(--fg-muted);">${samples.map(escapeHtml).join(", ")}</span>
-      </div>`;
+    if (documents.length > 0) {
+      html += `<div class="stored-file-list">${documents.map((doc) => `
+        <div class="stored-file-row">
+          <div><strong>${escapeHtml(String(doc.filename))}</strong><br>
+          <span>${Number(doc.chunk_count || 0)} chunks · ${Number(doc.page_count || 0)} pages${doc.ingested_at ? ` · ${escapeHtml(doc.ingested_at)}` : ""}</span></div>
+          <span class="file-status status-indexed">indexed</span>
+        </div>`).join("")}</div>`;
+    } else {
+      html += `<p class="hint">No successfully indexed documents.</p>`;
     }
 
     corpusInfo.innerHTML = html;
@@ -775,41 +825,36 @@ async function getJSON(path) {
 
 ingestForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const fd = new FormData(ingestForm);
-
-  const ifcPath = fd.get("ifc_path");
-  if (!ifcPath) {
-    logError("Pipeline failed", "Select an IFC file first (drag & drop or click to browse).");
+  const projectId = projectIdInput.value.trim();
+  const fileIds = Array.from(selectedIfcFileIds);
+  if (!projectId || !fileIds.length) {
+    logError("Pipeline failed", "Enter a project ID and select at least one uploaded IFC model.");
     return;
   }
 
   ingestSubmitBtn.disabled = true;
 
   try {
-    const url = new URL("/api/ingest", window.location.origin);
-    url.searchParams.set("ifc_path", ifcPath);
-
-    // Grab multiple selections from the checkbox-dropdowns if they exist, otherwise fallback to old csv behavior
-    if (ingestStoreyDropdown.root && ingestTypeDropdown.root) {
-        const storeys = ingestStoreyDropdown.getSelected();
-        const types = ingestTypeDropdown.getSelected();
-
-        addRepeatedParams("storey", storeys, url.searchParams);
-        addRepeatedParams("type", types, url.searchParams);
-    } else {
-        csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
-        csvToRepeatedParams("type", fd.get("type"), url.searchParams);
-    }
-
-    url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
-
-    logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
-    const ingestData = await postJSON(url.pathname + url.search);
+    const payload = {
+      file_ids: fileIds,
+      storeys: ingestStoreyDropdown.getSelected(),
+      types: ingestTypeDropdown.getSelected(),
+      reset_all: ingestForm.querySelector('input[name="reset"]').checked,
+      run_clash_detection: true,
+    };
+    logInfo(`Federating ${fileIds.length} IFC model(s), validating alignment, importing, and analyzing...`);
+    const response = await fetch(`/api/ifc/projects/${encodeURIComponent(projectId)}/ingest`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const ingestData = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(JSON.stringify(ingestData.detail || ingestData));
     logSuccess("Ingestion complete", formatIngestSummary(ingestData.load_summary || ingestData));
-
-    logInfo("Starting clash & clearance detection...");
-    const analyzeData = await postJSON("/api/analyze");
-    logSuccess("Clash detection complete", formatAnalyzeSummary(analyzeData));
+    if (ingestData.analysis) logSuccess("Clash detection complete", formatAnalyzeSummary(ingestData.analysis));
+    (ingestData.per_file || []).forEach((item) => {
+      const detail = item.status === "processed" ? `${item.nodes} nodes, ${item.edges} edges` : item.error;
+      appendLog(`${item.filename}: ${item.status}`, item.status === "processed" ? "success" : "error", [detail]);
+    });
+    await loadIfcProjects();
 
     // The graph just changed (new/updated storeys, types, clashes) - refresh
     // the Results tab's filter options before loading results.
@@ -854,6 +899,9 @@ async function loadResults() {
     if (currentTypesFilter && currentTypesFilter.length > 0) {
       url.searchParams.set("types", currentTypesFilter.join(","));
     }
+    if (projectIdInput && projectIdInput.value.trim()) {
+      url.searchParams.set("project_id", projectIdInput.value.trim());
+    }
 
     const rows = await getJSON(url.pathname + url.search);
     renderRows(rows);
@@ -872,10 +920,10 @@ function renderRows(rows) {
   resultsBody.innerHTML = rows
     .map((r) => `
       <tr>
-        <td>${r.a_type ?? ""}</td>
-        <td>${r.a_name ?? ""}</td>
-        <td>${r.b_type ?? ""}</td>
-        <td>${r.b_name ?? ""}</td>
+        <td><strong>${escapeHtml(String(r.a_type ?? ""))}</strong><br>${escapeHtml(String(r.a_name ?? ""))}<br><small>${escapeHtml(String(r.a_guid ?? r.a_id ?? ""))}</small></td>
+        <td>${escapeHtml(String(r.a_source_ifc_file ?? "legacy/unknown"))}</td>
+        <td><strong>${escapeHtml(String(r.b_type ?? ""))}</strong><br>${escapeHtml(String(r.b_name ?? ""))}<br><small>${escapeHtml(String(r.b_guid ?? r.b_id ?? ""))}</small></td>
+        <td>${escapeHtml(String(r.b_source_ifc_file ?? "legacy/unknown"))}${r.cross_file ? "<br><span class=\"file-status\">cross-file</span>" : ""}</td>
         <td>${r.issue ?? ""}</td>
         <td>${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
       </tr>
@@ -887,6 +935,7 @@ function renderRows(rows) {
 // Init
 // ------------------------------------------------------------------
 loadCorpusStatus();
+loadIfcProjects();
 loadResults();
 
 // Fetch storeys/types from Neo4j when the page loads or the Results tab
@@ -942,9 +991,7 @@ async function loadTypes() {
 }
 
 // ------------------------------------------------------------------
-// Pipeline form: upload an IFC file, then populate its storey/type
-// filters. Nothing is scanned until the user picks a file — no more
-// scanning the whole dataset/ifc/ directory up front.
+// Project-scoped multi-IFC upload, selection and combined filter metadata.
 // ------------------------------------------------------------------
 
 function populateIngestFilterSelects(data) {
@@ -972,18 +1019,24 @@ function resetIngestFilterSelects(placeholder) {
     if (rescanBtn) rescanBtn.disabled = true;
 }
 
-async function uploadIfcFile(file) {
-    if (!file.name.toLowerCase().endsWith(".ifc")) {
-        logError("IFC upload failed", "Only .ifc files are accepted.");
+async function uploadIfcFiles(files) {
+    files = Array.from(files || []);
+    if (!files.length || files.some((file) => !file.name.toLowerCase().endsWith(".ifc"))) {
+        logError("IFC upload failed", "Every selected file must be an .ifc file.");
         return;
     }
-
-    ifcDropZoneFile.textContent = `${file.name} — uploading...`;
+    const projectId = projectIdInput.value.trim();
+    if (!projectId) {
+        logError("IFC upload failed", "Enter a Building / Project ID first.");
+        return;
+    }
+    renderSelectedFileNames(ifcDropZoneFile, files);
     ifcDropZone.classList.add("has-file");
-    resetIngestFilterSelects("Scanning file...");
+    resetIngestFilterSelects("Scanning files...");
 
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach((item) => formData.append("files", item));
+    formData.append("project_id", projectId);
 
     try {
         const response = await fetch("/api/ifc/upload", { method: "POST", body: formData });
@@ -993,49 +1046,68 @@ async function uploadIfcFile(file) {
             throw new Error(data.detail || `${response.status} ${response.statusText}`);
         }
 
-        ifcPathHidden.value = data.ifc_path;
-        ifcDropZoneFile.textContent = data.filename;
         populateIngestFilterSelects(data);
-        logSuccess("IFC file uploaded", [`${data.filename} — ${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
+        (data.files || []).forEach((item) => {
+          const ok = item.status === "uploaded";
+          appendLog(`${item.filename}: ${item.status}`, ok ? "success" : "error", [ok ? "Parsed and ready for ingestion" : item.error]);
+          if (ok) selectedIfcFileIds.add(item.file_id);
+        });
+        await loadIfcProjects();
     } catch (err) {
-        ifcPathHidden.value = "";
-        ifcDropZoneFile.textContent = `${file.name} — upload failed`;
+        ifcDropZoneFile.textContent = `${files.length} file(s) — upload failed`;
         ifcDropZone.classList.remove("has-file");
-        resetIngestFilterSelects("Select an IFC file first");
+        resetIngestFilterSelects("Select IFC files first");
         logError("IFC upload failed", err.message || err);
     }
 }
 
-async function rescanCurrentIfcFile() {
-    const ifcPath = ifcPathHidden.value;
-    if (!ifcPath) return;
-
-    const rescanBtn = document.getElementById('rescan-dataset-btn');
-    if (rescanBtn) rescanBtn.disabled = true;
-
-    try {
-        const url = `/api/filters/dataset?refresh=true&ifc_path=${encodeURIComponent(ifcPath)}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        populateIngestFilterSelects(data);
-        if (data.errors && data.errors.length > 0) {
-            logError("Rescan finished with issues", data.errors);
-        } else {
-            logSuccess("Rescanned IFC file", [`${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
-        }
-    } catch (err) {
-        logError("Rescan failed", err.message || err);
-    } finally {
-        if (rescanBtn) rescanBtn.disabled = false;
-    }
+async function loadIfcProjects() {
+  try {
+    const data = await getJSON("/api/ifc/projects");
+    ifcProjects = data.projects || [];
+    const projectId = projectIdInput.value.trim();
+    const project = ifcProjects.find((item) => item.project_id === projectId);
+    const files = project ? project.files : [];
+    const availableIds = new Set(files.map((item) => item.file_id));
+    selectedIfcFileIds = new Set(Array.from(selectedIfcFileIds).filter((id) => availableIds.has(id)));
+    if (!selectedIfcFileIds.size) files.filter((item) => item.status === "ingested").forEach((item) => selectedIfcFileIds.add(item.file_id));
+    const updateCombinedFilters = () => {
+      const selected = files.filter((item) => selectedIfcFileIds.has(item.file_id));
+      const storeys = Array.from(new Set(selected.flatMap((item) => item.storeys || []))).sort();
+      const counts = {};
+      selected.flatMap((item) => item.types || []).forEach((item) => {
+        counts[item.type] = (counts[item.type] || 0) + Number(item.count || 0);
+      });
+      populateIngestFilterSelects({storeys, types: Object.entries(counts).map(([type, count]) => ({type, count}))});
+    };
+    updateCombinedFilters();
+    const registeredHtml = files.length ? files.map((item) => `
+      <label class="stored-file-row selectable-file">
+        <input type="checkbox" data-file-id="${escapeHtml(item.file_id)}" ${selectedIfcFileIds.has(item.file_id) ? "checked" : ""} />
+        <div><strong>${escapeHtml(item.filename)}</strong><br>
+          <span>${escapeHtml(item.discipline || "unspecified")} · ${Number(item.node_count || 0)} nodes · ${escapeHtml(item.ingested_at || item.uploaded_at || "")}</span></div>
+        <span class="file-status status-${escapeHtml(item.status)}">${escapeHtml(item.processing_status || item.status)}</span>
+      </label>`).join("") : `<p class="hint">No parsed IFC files in this project.</p>`;
+    const legacyHtml = (data.legacy_unregistered_files || []).length ? `
+      <p class="hint">Legacy files on disk (not selectable until uploaded/registered):</p>
+      ${(data.legacy_unregistered_files || []).map((item) => `
+        <div class="stored-file-row"><div><strong>${escapeHtml(item.filename)}</strong></div>
+        <span class="file-status">not imported</span></div>`).join("")}` : "";
+    ifcModelList.innerHTML = registeredHtml + legacyHtml;
+    ifcModelList.querySelectorAll("input[data-file-id]").forEach((input) => input.addEventListener("change", () => {
+      if (input.checked) selectedIfcFileIds.add(input.dataset.fileId);
+      else selectedIfcFileIds.delete(input.dataset.fileId);
+      updateCombinedFilters();
+    }));
+  } catch (err) {
+    ifcModelList.innerHTML = `<p class="hint">Failed to list IFC models: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 ifcDropZone.addEventListener("click", () => ifcFileInput.click());
 
 ifcFileInput.addEventListener("change", () => {
-    if (ifcFileInput.files && ifcFileInput.files[0]) {
-        uploadIfcFile(ifcFileInput.files[0]);
-    }
+    if (ifcFileInput.files && ifcFileInput.files.length) uploadIfcFiles(ifcFileInput.files);
 });
 
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -1054,12 +1126,12 @@ ifcFileInput.addEventListener("change", () => {
 });
 
 ifcDropZone.addEventListener("drop", (e) => {
-    const files = e.dataTransfer.files;
-    if (files && files[0] && files[0].name.toLowerCase().endsWith(".ifc")) {
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length && files.every((item) => item.name.toLowerCase().endsWith(".ifc"))) {
         const dt = new DataTransfer();
-        dt.items.add(files[0]);
+        files.forEach((item) => dt.items.add(item));
         ifcFileInput.files = dt.files;
-        uploadIfcFile(files[0]);
+        uploadIfcFiles(files);
     } else {
         logError("IFC upload failed", "Only .ifc files are accepted.");
     }
@@ -1067,8 +1139,14 @@ ifcDropZone.addEventListener("drop", (e) => {
 
 const rescanDatasetBtn = document.getElementById('rescan-dataset-btn');
 if (rescanDatasetBtn) {
-    rescanDatasetBtn.addEventListener('click', rescanCurrentIfcFile);
+    rescanDatasetBtn.disabled = false;
+    rescanDatasetBtn.textContent = "Refresh model list";
+    rescanDatasetBtn.addEventListener('click', loadIfcProjects);
 }
+projectIdInput.addEventListener("change", () => {
+  selectedIfcFileIds.clear();
+  loadIfcProjects();
+});
 
 // Handle clicking "Apply Filters" on the Results table
 const applyBtn = document.getElementById('applyFiltersBtn');

@@ -1,5 +1,9 @@
 # BIM-Intellect — System Documentation
 
+> **RAG v2 note (August 2026):** The regulation/chat pipeline has been replaced by the versioned multilingual, conversation-aware architecture documented in [`docs/RAG_ARCHITECTURE.md`](docs/RAG_ARCHITECTURE.md). That document supersedes the older `regulations` collection, five-result retrieval, OpenRouter embedding, and stateless `/api/ask` descriptions retained later in this historical overview.
+>
+> **Multi-file workflow note (August 2026):** PDF batches, project-grouped IFC batches, source provenance, coordinate-frame validation, and cross-file clash analysis are documented in [`docs/MULTI_FILE_WORKFLOWS.md`](docs/MULTI_FILE_WORKFLOWS.md). That document supersedes the historical single-file pipeline descriptions below.
+
 > **Hybrid RAG for Building Regulatory Compliance**  
 > Combines vector retrieval from building regulations (Mabhas 15) with graph retrieval from IFC building models to answer compliance questions with citations to both legal clauses and specific building elements.
 

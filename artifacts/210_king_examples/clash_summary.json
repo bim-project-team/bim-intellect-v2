@@ -1,0 +1,754 @@
+{
+  "counts": {
+    "CLASH": 20568,
+    "CLEARANCE_VIOLATION": 9642
+  },
+  "pair_counts": [
+    [
+      [
+        "IfcBeam",
+        "IfcWallStandardCase"
+      ],
+      4987
+    ],
+    [
+      [
+        "IfcFlowFitting",
+        "IfcFlowSegment"
+      ],
+      4378
+    ],
+    [
+      [
+        "IfcFlowSegment",
+        "IfcWallStandardCase"
+      ],
+      3366
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcSlab"
+      ],
+      2543
+    ],
+    [
+      [
+        "IfcFlowSegment",
+        "IfcSlab"
+      ],
+      2505
+    ],
+    [
+      [
+        "IfcFlowFitting",
+        "IfcWallStandardCase"
+      ],
+      2352
+    ],
+    [
+      [
+        "IfcFlowFitting",
+        "IfcSlab"
+      ],
+      2060
+    ],
+    [
+      [
+        "IfcColumn",
+        "IfcWallStandardCase"
+      ],
+      1837
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcBeam"
+      ],
+      1377
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcColumn"
+      ],
+      1286
+    ],
+    [
+      [
+        "IfcColumn",
+        "IfcSlab"
+      ],
+      1280
+    ],
+    [
+      [
+        "IfcFlowSegment",
+        "IfcFlowSegment"
+      ],
+      1242
+    ],
+    [
+      [
+        "IfcFlowFitting",
+        "IfcFlowFitting"
+      ],
+      416
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcFlowSegment"
+      ],
+      241
+    ],
+    [
+      [
+        "IfcColumn",
+        "IfcFlowSegment"
+      ],
+      93
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcFlowFitting"
+      ],
+      78
+    ],
+    [
+      [
+        "IfcWall",
+        "IfcWallStandardCase"
+      ],
+      64
+    ],
+    [
+      [
+        "IfcSlab",
+        "IfcSlab"
+      ],
+      47
+    ],
+    [
+      [
+        "IfcColumn",
+        "IfcFlowFitting"
+      ],
+      22
+    ],
+    [
+      [
+        "IfcSlab",
+        "IfcWall"
+      ],
+      19
+    ],
+    [
+      [
+        "IfcColumn",
+        "IfcWall"
+      ],
+      11
+    ],
+    [
+      [
+        "IfcBeam",
+        "IfcWall"
+      ],
+      4
+    ],
+    [
+      [
+        "IfcFlowSegment",
+        "IfcWall"
+      ],
+      1
+    ],
+    [
+      [
+        "IfcFlowFitting",
+        "IfcWall"
+      ],
+      1
+    ]
+  ],
+  "samples": [
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcBeam"
+      ],
+      "issue": "CLASH",
+      "metric": 0.0509,
+      "a": {
+        "guid": "3TJuDF1T12QQrZPP7iyJhj",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:360641",
+        "storey": "T.O. Landing05",
+        "bbox": [
+          -101.522343,
+          -31.465357,
+          65.8125066,
+          -84.98934,
+          -30.965357,
+          66.5625066
+        ]
+      },
+      "b": {
+        "guid": "0sVr6FuEvAKuZvH9AaT5$8",
+        "type": "IfcFlowSegment",
+        "name": "Pipe Types:CHWS:768971",
+        "storey": "Sixth Level_FF",
+        "bbox": [
+          -101.00493833,
+          -31.45300033,
+          65.0156277,
+          -100.74452167,
+          -31.19258367,
+          75.8593777
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcBeam"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.2292,
+      "a": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCqA",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:361964",
+        "storey": "BLDG 4- LEVEL 4 FLR. FIN.",
+        "bbox": [
+          -101.52234334,
+          -45.5487,
+          43.2708333,
+          -85.13517334,
+          -45.0487,
+          44.0208333
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFujk6",
+        "type": "IfcFlowSegment",
+        "name": "Rectangular Duct:Supply:508684",
+        "storey": "Third Level_FF",
+        "bbox": [
+          -101.49803,
+          -49.399679,
+          42.541668,
+          -99.49803,
+          -37.325449,
+          43.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcWallStandardCase"
+      ],
+      "issue": "CLASH",
+      "metric": 0.4071,
+      "a": {
+        "guid": "1ZSClU8aj9DA2cLrK85veG",
+        "type": "IfcWallStandardCase",
+        "name": "Basic Wall:BLDG 1- King St. Facade-Brick Masonary- 3levelup - 13\" Masonry 2:189365",
+        "storey": "BLDG. 1,2,3- LEVEL 3 FLR. FIN.",
+        "bbox": [
+          -102.6056767,
+          -54.01366,
+          36.041668,
+          -101.5223433,
+          69.628895,
+          80.433895
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFugPZ",
+        "type": "IfcFlowSegment",
+        "name": "Rectangular Duct:Supply:507625",
+        "storey": "Fifth Level_FF",
+        "bbox": [
+          -101.58122,
+          -51.068777,
+          64.541668,
+          -99.58122,
+          -37.240403,
+          65.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcWallStandardCase"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.0243,
+      "a": {
+        "guid": "1ZSClU8aj9DA2cLrK85veG",
+        "type": "IfcWallStandardCase",
+        "name": "Basic Wall:BLDG 1- King St. Facade-Brick Masonary- 3levelup - 13\" Masonry 2:189365",
+        "storey": "BLDG. 1,2,3- LEVEL 3 FLR. FIN.",
+        "bbox": [
+          -102.6056767,
+          -54.01366,
+          36.041668,
+          -101.5223433,
+          69.628895,
+          80.433895
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFujk6",
+        "type": "IfcFlowSegment",
+        "name": "Rectangular Duct:Supply:508684",
+        "storey": "Third Level_FF",
+        "bbox": [
+          -101.49803,
+          -49.399679,
+          42.541668,
+          -99.49803,
+          -37.325449,
+          43.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcSlab"
+      ],
+      "issue": "CLASH",
+      "metric": 13.8284,
+      "a": {
+        "guid": "1rQ6eOrv517erc8mMzErCk",
+        "type": "IfcSlab",
+        "name": "Basic Roof:Massing_Roof:1023874:1",
+        "storey": "Level 4",
+        "bbox": [
+          -441.92015343342905,
+          -249.9312828250567,
+          24.547201,
+          170.84370539244964,
+          206.02217102336573,
+          138.16222399999998
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFugPZ",
+        "type": "IfcFlowSegment",
+        "name": "Rectangular Duct:Supply:507625",
+        "storey": "Fifth Level_FF",
+        "bbox": [
+          -101.58122,
+          -51.068777,
+          64.541668,
+          -99.58122,
+          -37.240403,
+          65.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcSlab"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.1059,
+      "a": {
+        "guid": "2_FCaLmfj6yAPasaU47QdD",
+        "type": "IfcSlab",
+        "name": "Floor:BLDG1-FLR-Generic:339256",
+        "storey": "BLDG. 1,2,3- LEVEL 5 FLR. FIN.",
+        "bbox": [
+          -101.52235,
+          -61.965332,
+          55.2708347,
+          -14.99866,
+          69.62888800000002,
+          55.791668
+        ]
+      },
+      "b": {
+        "guid": "0gCbTqKBn5BRyj$v0v6wsN",
+        "type": "IfcFlowSegment",
+        "name": "Rectangular Duct:Supply:607454",
+        "storey": "Fourth Level_FF",
+        "bbox": [
+          -75.75794335,
+          32.57998165,
+          55.897563000000005,
+          -73.09127665,
+          35.246648349999994,
+          79.00061500000001
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcColumn"
+      ],
+      "issue": "CLASH",
+      "metric": 0.1734,
+      "a": {
+        "guid": "15_bC4FTv02hB3jHvFugDp",
+        "type": "IfcFlowSegment",
+        "name": "Round Duct:Supply:506873",
+        "storey": "Second Level_FF",
+        "bbox": [
+          -90.22181,
+          -21.47973234,
+          30.667155522059403,
+          -77.290846,
+          -20.81306566,
+          31.3328444779406
+        ]
+      },
+      "b": {
+        "guid": "06MvY_2Gr0AgeAktGGlSLx",
+        "type": "IfcColumn",
+        "name": "BLDG1 - Basement Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:366839",
+        "storey": "BLDG 1,2,3- LEVEL 2 FLR. FIN.",
+        "bbox": [
+          -85.32268,
+          -21.03628,
+          21.0,
+          -84.1560134,
+          -19.03628,
+          32.791667000000004
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowSegment",
+        "IfcColumn"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.1106,
+      "a": {
+        "guid": "15_bC4FTv02hB3jHvFugQS",
+        "type": "IfcFlowSegment",
+        "name": "Round Duct:Supply:507414",
+        "storey": "Second Level_FF",
+        "bbox": [
+          -86.43283,
+          19.179735,
+          30.50012236165738,
+          -85.43331938674001,
+          56.596403,
+          31.49987763834262
+        ]
+      },
+      "b": {
+        "guid": "06MvY_2Gr0AgeAktGGlSJ4",
+        "type": "IfcColumn",
+        "name": "BLDG1 - Basement Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:366920",
+        "storey": "BLDG 1,2,3- LEVEL 2 FLR. FIN.",
+        "bbox": [
+          -85.32268,
+          30.50561,
+          21.0,
+          -84.1560134,
+          32.50561,
+          32.791667000000004
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowFitting",
+        "IfcBeam"
+      ],
+      "issue": "CLASH",
+      "metric": 0.0785,
+      "a": {
+        "guid": "3XduyAG3LE2eDeO0BfVivi",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:361693",
+        "storey": "T.O. ROOF BLDG 4",
+        "bbox": [
+          -101.522343,
+          -37.088913,
+          54.520832,
+          -84.98934,
+          -36.588913,
+          55.270832
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFuj6Z",
+        "type": "IfcFlowFitting",
+        "name": "Rectangular Duct Elbow - Radius:1 W - Supply:1 W - Supply:510249",
+        "storey": "Fourth Level_FF",
+        "bbox": [
+          -90.75505273629123,
+          -36.75929068109853,
+          52.37500221366023,
+          -89.45341729176053,
+          -34.23197802199371,
+          54.87497968806248
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowFitting",
+        "IfcBeam"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.2292,
+      "a": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCwj",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:362059",
+        "storey": "BLDG 4- LEVEL 4 FLR. FIN.",
+        "bbox": [
+          -101.522343,
+          -37.088913,
+          43.2708333,
+          -84.98934,
+          -36.588913,
+          44.0208333
+        ]
+      },
+      "b": {
+        "guid": "1Puh2xZRbCNfcdDRoaCYWO",
+        "type": "IfcFlowFitting",
+        "name": "Rectangular Duct Elbow - Radius:1 W - Supply:1 W - Supply:580932",
+        "storey": "Third Level_FF",
+        "bbox": [
+          -101.49803,
+          -40.00743999080152,
+          42.541668,
+          -95.49803127307116,
+          -34.32545,
+          43.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowFitting",
+        "IfcWallStandardCase"
+      ],
+      "issue": "CLASH",
+      "metric": 0.1673,
+      "a": {
+        "guid": "1ZSClU8aj9DA2cLrK85veG",
+        "type": "IfcWallStandardCase",
+        "name": "Basic Wall:BLDG 1- King St. Facade-Brick Masonary- 3levelup - 13\" Masonry 2:189365",
+        "storey": "BLDG. 1,2,3- LEVEL 3 FLR. FIN.",
+        "bbox": [
+          -102.6056767,
+          -54.01366,
+          36.041668,
+          -101.5223433,
+          69.628895,
+          80.433895
+        ]
+      },
+      "b": {
+        "guid": "15_bC4FTv02hB3jHvFugP$",
+        "type": "IfcFlowFitting",
+        "name": "Rectangular Duct Elbow - Radius:1 W - Supply:1 W - Supply:507637",
+        "storey": "Fifth Level_FF",
+        "bbox": [
+          -101.58122,
+          -39.92239199080153,
+          64.541668,
+          -95.58122127307117,
+          -34.240402,
+          65.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcFlowFitting",
+        "IfcWallStandardCase"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.0243,
+      "a": {
+        "guid": "1ZSClU8aj9DA2cLrK85veG",
+        "type": "IfcWallStandardCase",
+        "name": "Basic Wall:BLDG 1- King St. Facade-Brick Masonary- 3levelup - 13\" Masonry 2:189365",
+        "storey": "BLDG. 1,2,3- LEVEL 3 FLR. FIN.",
+        "bbox": [
+          -102.6056767,
+          -54.01366,
+          36.041668,
+          -101.5223433,
+          69.628895,
+          80.433895
+        ]
+      },
+      "b": {
+        "guid": "1Puh2xZRbCNfcdDRoaCYWO",
+        "type": "IfcFlowFitting",
+        "name": "Rectangular Duct Elbow - Radius:1 W - Supply:1 W - Supply:580932",
+        "storey": "Third Level_FF",
+        "bbox": [
+          -101.49803,
+          -40.00743999080152,
+          42.541668,
+          -95.49803127307116,
+          -34.32545,
+          43.041668
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcBeam",
+        "IfcColumn"
+      ],
+      "issue": "CLASH",
+      "metric": 0.012,
+      "a": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCv5",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:362147",
+        "storey": "Level 2",
+        "bbox": [
+          -102.678593,
+          45.33895,
+          32.0032997,
+          -84.98934,
+          45.83895,
+          32.7532997
+        ]
+      },
+      "b": {
+        "guid": "06MvY_2Gr0AgeAktGGlSJf",
+        "type": "IfcColumn",
+        "name": "BLDG1 - Basement Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:366949",
+        "storey": "BLDG 1,2,3- LEVEL 2 FLR. FIN.",
+        "bbox": [
+          -85.32268,
+          43.38683,
+          21.0,
+          -84.1560134,
+          45.38683,
+          32.791667000000004
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcBeam",
+        "IfcColumn"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.0866,
+      "a": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCvF",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:362153",
+        "storey": "Level 2",
+        "bbox": [
+          -102.678593,
+          29.919035,
+          32.0032997,
+          -84.98934,
+          30.419035,
+          32.7532997
+        ]
+      },
+      "b": {
+        "guid": "06MvY_2Gr0AgeAktGGlSJ4",
+        "type": "IfcColumn",
+        "name": "BLDG1 - Basement Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:210 King - BLDG1 - Basement Round Column Type 1:366920",
+        "storey": "BLDG 1,2,3- LEVEL 2 FLR. FIN.",
+        "bbox": [
+          -85.32268,
+          30.50561,
+          21.0,
+          -84.1560134,
+          32.50561,
+          32.791667000000004
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcBeam",
+        "IfcSlab"
+      ],
+      "issue": "CLASH",
+      "metric": 6.5788,
+      "a": {
+        "guid": "1rQ6eOrv517erc8mMzErCk",
+        "type": "IfcSlab",
+        "name": "Basic Roof:Massing_Roof:1023874:1",
+        "storey": "Level 4",
+        "bbox": [
+          -441.92015343342905,
+          -249.9312828250567,
+          24.547201,
+          170.84370539244964,
+          206.02217102336573,
+          138.16222399999998
+        ]
+      },
+      "b": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCvZ",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:362117",
+        "storey": "Level 2",
+        "bbox": [
+          -102.67859334,
+          -45.5487,
+          32.0032997,
+          -85.13517334,
+          -45.0487,
+          32.7532997
+        ]
+      }
+    },
+    {
+      "pair": [
+        "IfcBeam",
+        "IfcSlab"
+      ],
+      "issue": "CLEARANCE_VIOLATION",
+      "metric": 0.0175,
+      "a": {
+        "guid": "3QmfkFRoT1E9$A3fuWNCvZ",
+        "type": "IfcBeam",
+        "name": "BLDG1-Beam-Timber:6x9:6x9:362117",
+        "storey": "Level 2",
+        "bbox": [
+          -102.67859334,
+          -45.5487,
+          32.0032997,
+          -85.13517334,
+          -45.0487,
+          32.7532997
+        ]
+      },
+      "b": {
+        "guid": "3C4heucafBiB2e7fJoxrg3",
+        "type": "IfcSlab",
+        "name": "Floor:BLDG1-FLR-Generic:562397",
+        "storey": "BLDG. 1,2,3- LEVEL 3 FLR. FIN.",
+        "bbox": [
+          -101.52235,
+          -61.965332,
+          32.7708347,
+          -14.99866,
+          69.62888800000002,
+          33.291668
+        ]
+      }
+    }
+  ]
+}

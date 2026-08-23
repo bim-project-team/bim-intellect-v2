@@ -9,6 +9,11 @@ venv/
 .notebooks/
 
 tests/
+!tests/
+tests/*
+!tests/test_graph_anomaly.py
+!tests/test_rag_v2.py
+!tests/test_multifile_workflows.py
 
 # Environment variables
 .env
@@ -23,6 +28,7 @@ ifc_types.csv
 dataset/*.ifc
 dataset/*.zip
 *.ifc
+dataset/ifc/project_registry.json
 
 # ChromaDB
 chroma_db/
@@ -39,4 +45,3 @@ __pycache__/
 pytest.ini
 *.ini
 
-opencode.json

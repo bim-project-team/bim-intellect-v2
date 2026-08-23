@@ -38,8 +38,15 @@
         <div class="chat-wrapper card">
           <div class="chat-header">
             <h2>Agent Interface</h2>
-            <div class="status-indicator">
-              <span class="status-dot"></span> Ready
+            <div class="chat-header-controls">
+              <label class="model-toggle" for="strong-models-toggle" title="Use Gemini for query understanding and Claude Sonnet for the grounded answer">
+                <span>Use Stronger Models</span>
+                <input type="checkbox" id="strong-models-toggle" />
+                <span class="model-toggle-track" aria-hidden="true"></span>
+              </label>
+              <div class="status-indicator">
+                <span class="status-dot"></span> Ready
+              </div>
             </div>
           </div>
           
@@ -102,15 +109,27 @@
           <div class="card-body">
             <form id="ingest-form">
               <div class="form-group">
-                <label>IFC File</label>
+                <label>IFC Models</label>
                 <div class="drop-zone" id="ifc-drop-zone">
                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; color: var(--border-color);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                  <p>Drag & drop an .ifc file here or <strong>click to browse</strong></p>
-                  <input type="file" id="ifc-file" accept=".ifc" class="hidden-input" />
+                  <p>Drag & drop IFC files here or <strong>select multiple files</strong></p>
+                  <input type="file" id="ifc-file" accept=".ifc" class="hidden-input" multiple />
                   <p id="ifc-drop-zone-file" class="file-name"></p>
                 </div>
-                <input type="hidden" id="ifc_path" name="ifc_path" value="" required />
-                <p id="ifc-upload-hint" class="hint">Uploaded to dataset/ifc/ on the server, then scanned for its storeys and types.</p>
+                <p id="ifc-upload-hint" class="hint">Each model is parsed independently before it becomes selectable.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="project-id">Building / Project ID</label>
+                <input type="text" id="project-id" value="default-project" required />
+                <p class="hint">Only selected models in this project are federated for analysis.</p>
+              </div>
+
+              <div class="form-group">
+                <label>Uploaded / Imported IFC Models</label>
+                <div id="ifc-model-list" class="stored-file-list">
+                  <p class="hint">Loading models...</p>
+                </div>
               </div>
 
               <!-- Modern checkbox-dropdown multiselects -->
@@ -156,9 +175,9 @@
 
               <div class="form-group checkbox-group">
                 <label class="checkbox-label">
-                  <input type="checkbox" name="reset" value="true" checked />
+                  <input type="checkbox" name="reset" value="true" />
                   <span class="checkmark"></span>
-                  Wipe existing graph before loading
+                  Wipe the entire graph before loading (normally leave off)
                 </label>
               </div>
 
@@ -222,12 +241,12 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Element A (Type)</th>
-                <th>Name A</th>
-                <th>Element B (Type)</th>
-                <th>Name B</th>
+                <th>Element A</th>
+                <th>Source A</th>
+                <th>Element B</th>
+                <th>Source B</th>
                 <th>Issue Type</th>
-                <th>Metric (m)</th>
+                <th>Metric (shared model units)</th>
               </tr>
             </thead>
             <tbody id="results-body">
@@ -258,15 +277,15 @@
               <!-- Drag & Drop Zone -->
               <div class="drop-zone" id="drop-zone">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; color: var(--border-color);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p>Drag & drop a PDF here or <strong>click to browse</strong></p>
-                <input type="file" id="pdf-file" name="file" accept=".pdf" class="hidden-input" />
+                <p>Drag & drop PDFs here or <strong>select multiple files</strong></p>
+                <input type="file" id="pdf-file" name="files" accept=".pdf" class="hidden-input" multiple />
                 <p id="drop-zone-file" class="file-name"></p>
               </div>
 
               <div class="form-group" style="margin-top: 1.5rem;">
                 <label for="doc-id">Document ID (Optional)</label>
                 <input type="text" id="doc-id" name="doc_id" placeholder="e.g., mabhas-15" />
-                <p class="hint">Prefix for chunk IDs. Defaults to filename.</p>
+                <p class="hint">Used only when exactly one PDF is selected. Batch IDs are derived from filename and content hash.</p>
               </div>
 
               <div id="upload-status" class="status-banner hidden">
@@ -276,7 +295,7 @@
 
               <div class="form-actions">
                 <button type="submit" id="upload-submit" class="btn-primary w-100">
-                  Process & Embed PDF
+                  Process & Embed PDFs
                 </button>
               </div>
             </form>
@@ -286,7 +305,7 @@
         <!-- Right: Database Stats -->
         <div class="card">
           <div class="card-header flex-between">
-            <h3>ChromaDB Status</h3>
+            <h3>Stored / Indexed Documents</h3>
             <div style="display:flex;gap:0.5rem;">
               <button id="refresh-corpus-btn" class="btn-secondary btn-sm">Refresh</button>
               <button id="clear-corpus-btn" class="btn-danger btn-sm">Clear DB</button>
@@ -304,6 +323,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

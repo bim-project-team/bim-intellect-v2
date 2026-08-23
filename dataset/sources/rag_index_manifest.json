@@ -1,0 +1,95 @@
+{
+  "created_at": "2026-08-22T20:25:22.699109+00:00",
+  "source_dir": "F:\\Projects\\BMI-Intellect\\.gitrepo\\bim-intellect-v2\\dataset\\sources",
+  "collection": "regulations_v2",
+  "index_version": "2",
+  "embedding_provider": "local",
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "chunk_size": 1200,
+  "documents": [
+    {
+      "path": "dataset\\sources\\12_v5_1403_ایمنی_و_حفاظت_کار_در_حین_اجرا.pdf",
+      "filename": "12_v5_1403_ایمنی_و_حفاظت_کار_در_حین_اجرا.pdf",
+      "document_id": "12_v5_1403_ایمنی_و_حفاظت_کار_در_حین_اجرا-3629f22df0b6",
+      "sha256": "3629f22df0b67f3201da644f76a2471cde99b3dc538744179de258caa25e1d5f",
+      "chunks": 724,
+      "pages": 96,
+      "detected_clause_root": "01",
+      "canonical_chapter": "12",
+      "unlabeled_chunks": 8,
+      "toc_chunks": 98,
+      "extraction_error_pages": []
+    },
+    {
+      "path": "dataset\\sources\\15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "filename": "15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "document_id": "15 - v3-1392 - آسانسورها و پلکان برقی-e27e1d74e6de",
+      "sha256": "e27e1d74e6ded86ecfe6399b524b612d2cf6fdd2da4c6a36df7d94a3ed6ea477",
+      "chunks": 335,
+      "pages": 84,
+      "detected_clause_root": "15",
+      "canonical_chapter": "15",
+      "unlabeled_chunks": 29,
+      "toc_chunks": 21,
+      "extraction_error_pages": []
+    },
+    {
+      "path": "dataset\\sources\\18 - v3-1396 - عایق بندی و تنظیم صدا.pdf",
+      "filename": "18 - v3-1396 - عایق بندی و تنظیم صدا.pdf",
+      "document_id": "18 - v3-1396 - عایق بندی و تنظیم صدا-d5ea19313ed9",
+      "sha256": "d5ea19313ed95edbc014ef104451a8f16c9571045eb8e74e95cafde4e7ffb077",
+      "chunks": 311,
+      "pages": 112,
+      "detected_clause_root": "18",
+      "canonical_chapter": "18",
+      "unlabeled_chunks": 25,
+      "toc_chunks": 8,
+      "extraction_error_pages": []
+    },
+    {
+      "path": "dataset\\sources\\20 - v2-1396 - علائم و تابلوها.pdf",
+      "filename": "20 - v2-1396 - علائم و تابلوها.pdf",
+      "document_id": "20 - v2-1396 - علائم و تابلوها-f69496c1f0b5",
+      "sha256": "f69496c1f0b5b8f44c61c2e0840ba47612d074b6f2443aa7c1949e7710ab68ee",
+      "chunks": 429,
+      "pages": 88,
+      "detected_clause_root": "20",
+      "canonical_chapter": "20",
+      "unlabeled_chunks": 0,
+      "toc_chunks": 49,
+      "extraction_error_pages": []
+    },
+    {
+      "path": "dataset\\sources\\22 - v1-1392 - مراقبت و نگهداری.pdf",
+      "filename": "22 - v1-1392 - مراقبت و نگهداری.pdf",
+      "document_id": "22 - v1-1392 - مراقبت و نگهداری-bc4bdbbfe038",
+      "sha256": "bc4bdbbfe03892b8ad037587d5e23d1e5105773b395390565b16546fd0b28b19",
+      "chunks": 452,
+      "pages": 92,
+      "detected_clause_root": "22",
+      "canonical_chapter": "22",
+      "unlabeled_chunks": 16,
+      "toc_chunks": 100,
+      "extraction_error_pages": []
+    }
+  ],
+  "duplicate_files": [
+    {
+      "path": "dataset\\sources\\mabhas-15-elvators-stairs.pdf",
+      "duplicate_of": "dataset\\sources\\15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "sha256": "e27e1d74e6ded86ecfe6399b524b612d2cf6fdd2da4c6a36df7d94a3ed6ea477"
+    }
+  ],
+  "chunk_count": 2251,
+  "status": {
+    "collection": "regulations_v2",
+    "count": 2251,
+    "path": "./chroma_db",
+    "metadata": {
+      "embedding_provider": "local",
+      "rag_index_version": "2",
+      "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "hnsw:space": "cosine"
+    }
+  }
+}
