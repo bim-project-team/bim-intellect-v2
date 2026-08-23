@@ -38,3 +38,5 @@ __pycache__/
 
 pytest.ini
 *.ini
+
+opencode.json
