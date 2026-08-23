@@ -4,10 +4,13 @@ __pycache__/
 .venv/
 venv/
 
+# IDE
 .idea/
 
+# Notebooks
 .notebooks/
 
+# Tests - ignore all except selected tests
 tests/
 !tests/
 tests/*
@@ -25,23 +28,23 @@ storeys.csv
 ifc_types.csv
 
 # IFC models and large datasets
-dataset/*.ifc
-dataset/*.zip
 *.ifc
 dataset/ifc/project_registry.json
+
+# PDF and ZIP files
+*.pdf
+*.zip
 
 # ChromaDB
 chroma_db/
 
-# rag testing files
+# RAG testing files
 rag/find_cluases.py
 rag/inspect_chroma.py
 
 # OS specific
 .DS_Store
-__pycache__/
-*.pyc
 
+# Configuration
 pytest.ini
 *.ini
-
