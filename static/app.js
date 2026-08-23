@@ -90,6 +90,14 @@ class MultiSelectDropdown {
     return Array.from(this.selected);
   }
 
+  getFilterValue() {
+    // No selection and explicitly selecting every option both mean "all".
+    if (this.selected.size === 0 || this.selected.size === this.options.length) {
+      return null;
+    }
+    return this.getSelected();
+  }
+
   _renderOptions() {
     const filter = this.searchInput ? this.searchInput.value.trim().toLowerCase() : "";
     const visible = filter
@@ -260,6 +268,19 @@ function formatTime() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function containsRtlText(text) {
+  // Hebrew, Arabic, Arabic Supplement/Extended, and presentation forms.
+  // Persian code points are covered by these Unicode blocks.
+  return /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]/u.test(String(text || ""));
+}
+
+function applyTextDirection(element, text) {
+  const isRtl = containsRtlText(text);
+  element.dir = isRtl ? "rtl" : "ltr";
+  element.classList.toggle("rtl", isRtl);
+  element.classList.toggle("ltr", !isRtl);
+}
+
 function appendChatMessage(role, text, sources) {
   // Remove welcome screen on first real message
   const welcome = chatMessages.querySelector(".chat-welcome");
@@ -270,6 +291,7 @@ function appendChatMessage(role, text, sources) {
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
+  applyTextDirection(bubble, text);
   // Preserve line breaks in assistant responses
   bubble.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
   msgDiv.appendChild(bubble);
@@ -309,6 +331,8 @@ function appendChatMessage(role, text, sources) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+chatInput.addEventListener("input", () => applyTextDirection(chatInput, chatInput.value));
+
 function showTypingIndicator() {
   const welcome = chatMessages.querySelector(".chat-welcome");
   if (welcome) welcome.remove();
@@ -341,6 +365,7 @@ async function sendChat(question) {
 
   appendChatMessage("user", question);
   chatInput.value = "";
+  applyTextDirection(chatInput, "");
   chatInput.disabled = true;
   chatSend.disabled = true;
   showTypingIndicator();
@@ -837,8 +862,8 @@ ingestForm.addEventListener("submit", async (e) => {
   try {
     const payload = {
       file_ids: fileIds,
-      storeys: ingestStoreyDropdown.getSelected(),
-      types: ingestTypeDropdown.getSelected(),
+      storeys: ingestStoreyDropdown.getFilterValue(),
+      types: ingestTypeDropdown.getFilterValue(),
       reset_all: ingestForm.querySelector('input[name="reset"]').checked,
       run_clash_detection: true,
     };

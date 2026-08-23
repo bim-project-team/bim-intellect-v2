@@ -17,6 +17,8 @@ tests/*
 !tests/test_graph_anomaly.py
 !tests/test_rag_v2.py
 !tests/test_multifile_workflows.py
+!tests/test_graph_query_planner.py
+!tests/test_graph_retrieval_regression.py
 
 # Environment variables
 .env

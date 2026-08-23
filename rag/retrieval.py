@@ -209,12 +209,22 @@ def assemble_context(
     blocks: list[str] = []
     sources: list[dict[str, Any]] = []
     seen_sources: set[tuple[str, str, int]] = set()
-    for item in selected:
+    for source_index, item in enumerate(selected, start=1):
         metadata = item.metadata
         clause = str(metadata.get("clause_id", "unknown"))
         page = int(metadata.get("page_number", 0))
         source = str(metadata.get("source", "Unknown source"))
-        blocks.append(f"[Source: {source}; Clause {clause}; Page {page}]\n{item.text}")
+        section = str(metadata.get("section_id", "unknown"))
+        blocks.append(
+            f'<SOURCE id="source_{source_index}">\n'
+            f"Document: {source}\n"
+            f"Clause: {clause}\n"
+            f"Page: {page}\n"
+            f"Section: {section}\n"
+            f"Chunk-ID: {item.chunk_id}\n"
+            f"Text:\n{item.text}\n"
+            f"</SOURCE>"
+        )
         source_key = (source, clause, page)
         if clause not in {"", "unknown", "None"} and page and source_key not in seen_sources:
             seen_sources.add(source_key)

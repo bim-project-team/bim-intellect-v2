@@ -9,7 +9,15 @@ from rag.chunker import chunk_pdf_with_diagnostics
 from rag.config import RAGSettings, get_model_profile
 from rag.embedder import MultilingualEmbeddingFunction, collection_status
 from rag.memory import ConversationState, ConversationStore
-from rag.orchestrator import _safe_understanding_fallback, apply_routing_policy
+from rag.orchestrator import (
+    RAGOrchestrator,
+    RetrievalResult,
+    _safe_understanding_fallback,
+    apply_routing_policy,
+    canonicalize_generated_citations,
+    cited_regulation_pairs,
+    validate_generated_answer,
+)
 from rag.reranker import Candidate, rerank_candidates
 from rag.retrieval import _expand, assemble_context, retrieve_regulations
 
@@ -36,6 +44,20 @@ def test_chat_ui_toggle_defaults_off_and_sends_session_fields():
     assert "sessionStorage" in javascript
 
 
+def test_chat_ui_applies_rtl_direction_to_persian_messages():
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    javascript = Path("static/app.js").read_text(encoding="utf-8")
+    stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+    assert 'id="chat-input"' in html and 'dir="auto"' in html
+    assert "function containsRtlText" in javascript
+    assert "applyTextDirection(bubble, text)" in javascript
+    assert "chatInput.addEventListener(\"input\"" in javascript
+    assert ".chat-bubble.rtl" in stylesheet
+    assert "direction: rtl" in stylesheet
+    assert "text-align: right" in stylesheet
+    assert "unicode-bidi: plaintext" in stylesheet
+
+
 def test_strong_model_profile_uses_gemini_then_claude():
     settings = RAGSettings(
         strong_router_model="google/gemini-test",
@@ -46,6 +68,106 @@ def test_strong_model_profile_uses_gemini_then_claude():
     assert standard.mode == "standard"
     assert strong.router_model == "google/gemini-test"
     assert strong.final_model == "anthropic/claude-sonnet-test"
+
+
+@pytest.mark.parametrize("rendered", [
+    "[Clause 15-1-1-1, Page 11]",
+    "[Clause 15-1-1-1, Page 11 ]",
+    "(Clause 15-1-1-1, p. 11)",
+    "[Clause ۱۵–۱–۱–۱، Page ۱۱]",
+    "[بند ۱۵-۱-۱-۱، صفحه ۱۱]",
+    "[۱۵-۱-۱-۱، صفحه ۱۱]",
+    "**[Clause 15-1-1-1, Page 11]**",
+])
+def test_citation_variations_normalize_to_canonical_verified_metadata(rendered):
+    sources = [{
+        "type": "regulation", "source": "15.pdf",
+        "clause_id": "15-1-1-1", "page_number": 11,
+    }]
+    assert cited_regulation_pairs(rendered) == {("15-1-1-1", "11")}
+    assert canonicalize_generated_citations(rendered).strip("*") == "[Clause 15-1-1-1, Page 11]"
+    assert validate_generated_answer(rendered, sources, requires_regulatory_citation=True)
+
+
+def test_fabricated_citation_is_still_rejected():
+    sources = [{
+        "type": "regulation", "source": "15.pdf",
+        "clause_id": "15-1-1-1", "page_number": 11,
+    }]
+    assert not validate_generated_answer(
+        "ادعا [Clause 99-99-99, Page 999]", sources, requires_regulatory_citation=True
+    )
+
+
+def test_missing_citation_metadata_cannot_be_fabricated():
+    assert not validate_generated_answer(
+        "ادعا [Clause 15-1-1-1, Page 11]", [], requires_regulatory_citation=True
+    )
+
+
+def test_context_exposes_deterministic_complete_source_metadata():
+    candidate = Candidate(
+        "chunk-11", "متن مقررات", {
+            "document_id": "m15", "section_id": "15-1-1-1", "page_number": 11,
+            "chunk_index": 1, "clause_id": "15-1-1-1", "source": "15.pdf",
+        }, rerank_score=0.9,
+    )
+    context, sources, _ = assemble_context([candidate])
+    assert '<SOURCE id="source_1">' in context
+    assert "Document: 15.pdf" in context
+    assert "Clause: 15-1-1-1" in context
+    assert "Page: 11" in context
+    assert "Section: 15-1-1-1" in context
+    assert "Chunk-ID: chunk-11" in context
+    assert sources[0]["clause_id"] == "15-1-1-1"
+
+
+def test_standard_then_strong_in_same_conversation_uses_fresh_request_citations(monkeypatch):
+    settings = RAGSettings(
+        router_model="standard-router", final_model="standard-final",
+        strong_router_model="strong-router", strong_final_model="strong-final",
+    )
+    store = ConversationStore(settings)
+    orchestrator = RAGOrchestrator(settings=settings, memory=store, graph_retriever=object())
+    monkeypatch.setattr(orchestrator, "understand", lambda question, state, profile: {
+        "standalone_query": question, "retrieval_queries": [question], "needs_vector": True,
+        "needs_graph": False, "is_technical": True, "intent": "technical",
+        "is_follow_up": bool(state.messages), "completeness_requested": False,
+        "topic": "سیستم فراخوانی آسانسور",
+    })
+    retrievals = iter([
+        RetrievalResult(
+            vector_context="source one", sources=[{
+                "type": "regulation", "source": "15.pdf",
+                "clause_id": "15-1-1-1", "page_number": 11,
+            }]
+        ),
+        RetrievalResult(
+            vector_context="source two", sources=[{
+                "type": "regulation", "source": "15.pdf",
+                "clause_id": "15-2-5-6", "page_number": 43,
+            }]
+        ),
+    ])
+    monkeypatch.setattr(orchestrator, "retrieve", lambda understanding: next(retrievals))
+    monkeypatch.setattr(orchestrator, "generate", lambda question, understanding, retrieval, state, profile: (
+        "پاسخ استاندارد [Clause 15-1-1-1, Page 11]" if profile.mode == "standard"
+        else "پاسخ قوی [بند ۱۵-۲-۵-۶، صفحه ۴۳]"
+    ))
+
+    standard = orchestrator.ask(
+        "سيستمهاي فراخواني آسانسور به رو توضیح بده", "toggle-chat", use_strong_models=False
+    )
+    strong = orchestrator.ask(
+        "سيستمهاي فراخواني آسانسور به رو توضیح بده", "toggle-chat", use_strong_models=True
+    )
+
+    assert standard["model_mode"] == "standard"
+    assert standard["sources"][0]["clause_id"] == "15-1-1-1"
+    assert strong["model_mode"] == "strong"
+    assert strong["answer"] == "پاسخ قوی [Clause 15-2-5-6, Page 43]"
+    assert strong["sources"][0]["clause_id"] == "15-2-5-6"
+    assert "ارجاع قابل‌اعتبارسنجی نداشت" not in strong["answer"]
 
 
 def test_target_electrical_visual_inspection_is_one_expandable_section():

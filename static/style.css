@@ -576,6 +576,28 @@ button:disabled {
   border: 1px solid var(--border);
   font-size: 0.95rem;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+  unicode-bidi: plaintext;
+}
+
+.chat-bubble.rtl {
+  direction: rtl;
+  text-align: right;
+}
+
+.chat-bubble.ltr {
+  direction: ltr;
+  text-align: left;
+}
+
+#chat-input.rtl {
+  direction: rtl;
+  text-align: right;
+}
+
+#chat-input.ltr {
+  direction: ltr;
+  text-align: left;
 }
 
 .chat-msg.user .chat-bubble {

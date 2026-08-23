@@ -37,8 +37,10 @@ CONVERSATION_PROMPT = """Respond naturally and briefly to the user's conversatio
 Use the same language as the user. Do not claim that evidence is missing and do not invent technical facts."""
 
 CITATION_REPAIR_PROMPT = """Revise the draft so every regulatory claim has an immediately adjacent citation copied exactly
-from the supplied evidence. Remove unsupported claims and invented citations. Preserve all distinct requirements when the
-user requested completeness. Return only the corrected answer in the user's language."""
+from the supplied evidence. The only permitted citation syntax is [Clause <CLAUSE>, Page <PAGE>] using ASCII digits,
+ASCII hyphens, the English words Clause and Page, and the comma exactly as shown. Copy CLAUSE and PAGE from one SOURCE
+block; never translate or reformat them. Remove unsupported claims and invented citations. Preserve all distinct
+requirements when the user requested completeness. Return only the corrected answer in the user's language."""
 
 ROUTER_PROMPT = """You are a bilingual Persian/English query router for a BIM and engineering knowledge system.
 Determine which sources could provide useful evidence for the user's question.
@@ -99,6 +101,9 @@ Examples:
 - "فاصله لوله شماره ۱۲ از دیوار چقدر است؟" → vector=false, graph=true, is_technical=true
 - "آیا فاصله این لوله از دیوار مطابق مقررات است؟" → vector=true, graph=true, is_technical=true
 - "آیا این clearance violation مطابق ضوابط قابل قبول است؟" → vector=true, graph=true, is_technical=true
+- "تعداد دقیق IfcFlowSegmentها چقدر است؟" → vector=false, graph=true, is_technical=true
+- "آیا anomalyScore یا isAnomaly در Neo4j ثبت شده است؟" → vector=false, graph=true, is_technical=true
+- "چند CLASH و چند CLEARANCE_VIOLATION ثبت شده است؟" → vector=false, graph=true, is_technical=true
 - "سلام، حالت چطوره؟" → vector=false, graph=false, is_technical=false
 - "یک شعر بنویس" → vector=false, graph=false, is_technical=false
 
@@ -148,6 +153,11 @@ Rules:
 5. Use dynamic labels (e.g., :IfcDoor) when the IFC type is known from the question.
 6. If the question is vague, write a query that returns the most relevant elements and their basic properties.
 7. NEVER write DROP, DELETE, REMOVE, SET, CREATE, or MERGE statements.
+8. The relationship property is `r.issue`, not `r.issue_type`. Alias it as `issue_type` when the user asks for grouping.
+9. A request for separate counts by issue must RETURN `r.issue AS issue_type, count(r) AS issue_count`; a single total is incomplete.
+10. A storey relationship count includes either endpoint with `(a.storeyName = value OR b.storeyName = value)` and uses the directed stored relationship once to avoid double counting.
+11. Exact IFC-type questions compare `e.ifcType` exactly. Never substitute or conflate a related IFC class.
+12. When several fields or counts are requested, the RETURN clause must contain every one of them. Do not return a partial result.
 
 User Question: {question}
 """
@@ -180,14 +190,19 @@ Instructions:
    Copy clause_id and page_number exactly from the regulation context tag.
    Do not convert, normalize, reorder, or invent clause IDs.
    Do not cite a clause or page that does not appear in the provided context.
+   Even in a Persian answer, keep the words Clause and Page and all citation digits/hyphens in ASCII.
+   Correct template: [Clause <clause_id>, Page <page_number>]
+   Incorrect forms use translated labels/digits, "p." instead of "Page", or omit the Clause/Page labels.
 3. If specific elements are listed (with IDs/names), cite them (e.g., "Element ID 42abc — Main Stair").
 4. The graph context includes the exact Cypher query that was executed, followed by its result. The query's WHERE clauses and relationship filters already encode all the conditions from the user's question (e.g., issue type, storey, thresholds) — the returned aggregate (count/sum/etc.) IS the direct, complete answer to those conditions. Do not second-guess or ask for more specificity; state the number as the answer.
+   Report every requested graph output present in the result. Never say that another query is required and never replace a graph result with a document-evidence failure message.
 5. If both sources are provided, synthesize them: explain what the regulation requires and how the building data relates to it (compliance, violations, counts, etc.).
 6. If a required fact, number, dimension, threshold, or technical requirement is not explicitly present in the provided context, do not guess or infer it. State that the information is not specified in the retrieved context.
 7. If only one source was retrieved, answer only from that source. Do not speculate about information that might exist in the other source.
 8. Every numeric value in the answer must appear verbatim in the provided context. Do not substitute, approximate, convert, or infer numeric values.
 
 9. For regulatory requirements, every bullet or claim must include its supporting citation immediately after the claim.
+   Do not put citations only in a detached references list at the end.
 
 10. Never output a citation with clause_id equal to "unknown", "none", "null", or an empty value.
 
@@ -200,6 +215,7 @@ Instructions:
 14. Answer in the language of the user's current message (normally natural Persian).
 15. When the user asks for all items, completion, continuation, or more detail, preserve every distinct relevant source item. Do not merge a long source list into a few vague summaries.
 16. For a follow-up requesting more, prioritize material omitted from the previous answer, but retain enough organization to make the continuation understandable.
-17. Source tags may include a document filename. The only valid regulatory citation rendered to the user remains [Clause <clause_id>, Page <page_number>].
+17. Each SOURCE block deterministically exposes Document, Clause, Page, Section, Chunk-ID, and Text. Clause and Page are
+metadata, not prose to infer. The only valid regulatory citation rendered to the user remains [Clause <clause_id>, Page <page_number>].
 User Question: {question}
 """

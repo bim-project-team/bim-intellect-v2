@@ -152,6 +152,14 @@ def _node_id(guid, project_id=None, source_file_id=None):
     return guid
 
 
+def _normalize_optional_filter(values):
+    """Treat omitted and empty UI selections identically: both mean all."""
+    if not values:
+        return None
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    return normalized or None
+
+
 def extract(
     model,
     storey_filter=None,
@@ -163,6 +171,10 @@ def extract(
     discipline="unspecified",
     coordinate_system_id=None,
 ):
+    # The multiselect sends no values until the user chooses a subset. An
+    # empty selection means "All", not "None". Keep API/CLI behavior equal.
+    storey_filter = _normalize_optional_filter(storey_filter)
+    type_filter = _normalize_optional_filter(type_filter)
     node_rows = []
     edge_rows = []
 
@@ -223,7 +235,7 @@ def extract(
             if e.GlobalId in spatial_ids:
                 continue
             storey = storey_of(e)
-            if storey_filter is not None:
+            if storey_filter:
                 storey_name = storey[1] if storey else None
                 if storey_name not in storey_filter:
                     continue

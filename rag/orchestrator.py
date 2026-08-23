@@ -29,9 +29,23 @@ _VECTOR_REQUEST_PATTERNS = (
     r"(?:پی[‌\- ]?دی[‌\- ]?اف|سند\s+(?:بارگذاری|آپلود)\s*شده|فایل\s+(?:بارگذاری|آپلود)\s*شده)",
 )
 
+_GRAPH_REQUEST_PATTERNS = (
+    r"\bIfc[A-Za-z][A-Za-z0-9_]*\b", r"\bNeo4j\b", r"\bCLASHES_WITH\b",
+    r"\b(?:CLASH|CLEARANCE_VIOLATION|anomalyScore|isAnomaly)\b",
+    r"(?:گره|نود|رابطه).{0,40}(?:نوع|تعداد|ویژگی|پراپرتی)",
+)
+_REGULATION_INTENT_PATTERN = re.compile(
+    r"(?:مقررات|ضوابط|استاندارد|الزام|مطابق|سند|منبع|regulation|code|compliance)",
+    re.IGNORECASE,
+)
+
 
 def explicitly_requests_vector_context(question: str) -> bool:
     return any(re.search(pattern, question, flags=re.IGNORECASE) for pattern in _VECTOR_REQUEST_PATTERNS)
+
+
+def explicitly_requests_graph_context(question: str) -> bool:
+    return any(re.search(pattern, question, flags=re.IGNORECASE) for pattern in _GRAPH_REQUEST_PATTERNS)
 
 
 def apply_routing_policy(question: str, decision: dict) -> dict:
@@ -45,6 +59,12 @@ def apply_routing_policy(question: str, decision: dict) -> dict:
     for key in ("needs_vector", "needs_graph", "is_technical"):
         if not isinstance(routed[key], bool):
             raise ValueError(f"Router field {key!r} must be a boolean.")
+    if explicitly_requests_graph_context(question):
+        routed["needs_graph"] = True
+        routed["is_technical"] = True
+        if not _REGULATION_INTENT_PATTERN.search(question):
+            routed["needs_vector"] = False
+        routed["reasoning"] = "Neo4j retrieval required by explicit IFC/schema/property vocabulary."
     if explicitly_requests_vector_context(question) and not routed["needs_vector"]:
         routed["needs_vector"] = True
         routed["reasoning"] = "Vector retrieval required because the question explicitly refers to PDF knowledge."
@@ -92,31 +112,96 @@ def filter_sources(sources: list[dict]) -> list[dict]:
     ])
 
 
+_DIGIT_TRANSLATION = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_DASH_PATTERN = r"[-‐‑‒–—−]"
+_DIGITS = r"[0-9۰-۹٠-٩]"
+# Unlabelled citations are accepted only inside brackets/parentheses. This
+# covers localized output without mistaking arbitrary engineering numbers for citations.
 CITATION_PATTERN = re.compile(
-    r"(?:\[)?Clause\s+([0-9]+(?:-[0-9]+)+)\s*,?\s*Page\s+([0-9]+)(?:\])?",
+    rf"(?:"
+    rf"[\[(]\s*(?:(?:Clause|بند)\s*)?"
+    rf"(?P<bracket_clause>{_DIGITS}+(?:\s*{_DASH_PATTERN}\s*{_DIGITS}+)+)"
+    rf"\s*[,،;؛]\s*(?:Page|p\.?|صفحه)\s*(?P<bracket_page>{_DIGITS}+)\s*[\])]"
+    rf"|"
+    rf"(?:Clause|بند)\s+"
+    rf"(?P<label_clause>{_DIGITS}+(?:\s*{_DASH_PATTERN}\s*{_DIGITS}+)+)"
+    rf"\s*[,،;؛]?\s*(?:Page|p\.?|صفحه)\s*(?P<label_page>{_DIGITS}+)"
+    rf")",
     re.IGNORECASE,
 )
 
 
+@dataclass(frozen=True)
+class Citation:
+    clause: str
+    page: int
+    document: str | None = None
+
+
+def _normalize_digits(value: Any) -> str:
+    return str(value).translate(_DIGIT_TRANSLATION)
+
+
+def _normalize_clause(value: Any) -> str:
+    normalized = _normalize_digits(value).strip()
+    return re.sub(rf"\s*{_DASH_PATTERN}\s*", "-", normalized)
+
+
+def extract_regulation_citations(answer: str) -> list[Citation]:
+    citations: list[Citation] = []
+    for match in CITATION_PATTERN.finditer(answer or ""):
+        clause = match.group("bracket_clause") or match.group("label_clause")
+        page = match.group("bracket_page") or match.group("label_page")
+        citations.append(Citation(_normalize_clause(clause), int(_normalize_digits(page))))
+    return citations
+
+
+def canonicalize_generated_citations(answer: str) -> str:
+    """Render recognized equivalent citations in the public canonical syntax."""
+    def replace(match: re.Match) -> str:
+        clause = match.group("bracket_clause") or match.group("label_clause")
+        page = match.group("bracket_page") or match.group("label_page")
+        return f"[Clause {_normalize_clause(clause)}, Page {int(_normalize_digits(page))}]"
+
+    return CITATION_PATTERN.sub(replace, answer or "")
+
+
+def citation_like_fragments(answer: str) -> list[str]:
+    """Small safe diagnostics only; never logs the answer or retrieved document text."""
+    candidates = re.findall(
+        r"[\[(][^\]\)\r\n]{0,100}(?:Clause|Page|بند|صفحه|p\.)[^\]\)\r\n]{0,100}[\])]",
+        answer or "", flags=re.IGNORECASE,
+    )
+    return candidates[:20]
+
+
 def cited_regulation_pairs(answer: str) -> set[tuple[str, str]]:
-    return {(clause.strip(), page.strip()) for clause, page in CITATION_PATTERN.findall(answer or "")}
+    return {(citation.clause, str(citation.page)) for citation in extract_regulation_citations(answer)}
 
 
 def supported_regulation_pairs(sources: list[dict]) -> set[tuple[str, str]]:
     return {
-        (str(source.get("clause_id", "")).strip(), str(source.get("page_number", "")).strip())
+        (_normalize_clause(source.get("clause_id", "")), _normalize_digits(source.get("page_number", "")).strip())
         for source in sources if source.get("type", "regulation") == "regulation" and valid_source(source)
     }
 
 
 def validate_generated_answer(answer: str, sources: list[dict], requires_regulatory_citation: bool = False) -> bool:
     cited, supported = cited_regulation_pairs(answer), supported_regulation_pairs(sources)
-    if cited - supported:
-        logger.warning("Unsupported citations generated: %s", sorted(cited - supported))
+    invalid = cited - supported
+    if invalid:
+        logger.warning(
+            "Citation validation failed: generated=%s allowed=%s invalid=%s reason=not_in_current_retrieved_sources",
+            sorted(cited), sorted(supported), sorted(invalid),
+        )
         return False
     if requires_regulatory_citation and not cited:
-        logger.warning("Regulatory response did not include a traceable citation")
+        logger.warning(
+            "Citation validation failed: generated=[] allowed=%s reason=no_recognizable_regulatory_citation",
+            sorted(supported),
+        )
         return False
+    logger.info("Citation validation result=valid generated=%s allowed=%s", sorted(cited), sorted(supported))
     return True
 
 
@@ -125,7 +210,7 @@ def sources_used_by_answer(answer: str, sources: list[dict]) -> list[dict]:
     return [
         source for source in sources
         if source.get("type", "regulation") != "regulation"
-        or (str(source.get("clause_id", "")), str(source.get("page_number", ""))) in cited
+        or (_normalize_clause(source.get("clause_id", "")), _normalize_digits(source.get("page_number", "")).strip()) in cited
     ]
 
 
@@ -180,7 +265,7 @@ def _safe_understanding_fallback(question: str, state: ConversationState, error:
         needs_vector = state.last_needs_vector
         needs_graph = bool(state.last_needs_graph)
     else:
-        graph_signal = bool(re.search(
+        graph_signal = explicitly_requests_graph_context(question) or bool(re.search(
             r"(?:\bclash\b|\bclearance\b|کلش|تداخل|مدل\s*(?:ساختمان|بیم)?|عنصر\s*(?:شماره)?|این\s+(?:لوله|دیوار|تیر|عنصر))",
             normalized,
         ))
@@ -282,6 +367,13 @@ class RAGOrchestrator:
                     "cypher_query": graph.get("cypher_query", ""),
                     "cypher_source": graph.get("cypher_source", ""),
                     "record_count": graph.get("record_count", 0),
+                    "graph_intent": graph.get("graph_intent", "free_form"),
+                    "requested_outputs": graph.get("requested_outputs", []),
+                    "returned_columns": graph.get("returned_columns", []),
+                    "completeness_valid": graph.get("completeness_valid"),
+                    "missing_outputs": graph.get("missing_outputs", []),
+                    "query_count": graph.get("query_count", 1),
+                    "follow_up_query_required": graph.get("follow_up_query_required", False),
                 }
                 if graph.get("context"):
                     result.graph_context = (
@@ -317,6 +409,13 @@ class RAGOrchestrator:
         profile: ModelProfile,
     ) -> str:
         if not retrieval.has_any_context:
+            if understanding.get("needs_graph") and retrieval.graph_debug.get("error"):
+                return (
+                    "پرس‌وجوی Neo4j با خطا مواجه شد و هیچ نتیجه‌ای از گراف ساختمان دریافت نشد. "
+                    "هیچ مقدار یا واقعیت گرافی حدس زده نشد."
+                )
+            if understanding.get("needs_graph") and not understanding.get("needs_vector"):
+                return "پرس‌وجوی Neo4j اجرا شد، اما هیچ رکورد منطبق در گراف فعلی ساختمان پیدا نشد."
             return (
                 "پس از بازنویسی پرسش و جست‌وجوی تکمیلی، شواهد مرتبط و قابل استنادی "
                 "در منابع موجود پیدا نشد. لطفاً نام سند، تجهیز یا بخش موردنظر را دقیق‌تر مشخص کنید."
@@ -413,11 +512,24 @@ class RAGOrchestrator:
         if hasattr(self.graph_retriever, "cypher_gen"):
             self.graph_retriever.cypher_gen.model = profile.router_model
         retrieval = self.retrieve(understanding)
+        logger.info(
+            "RAG citation scope: mode=%s router=%s final=%s retrieved_chunks=%d allowed_citations=%s",
+            profile.mode, profile.router_model, profile.final_model,
+            len(retrieval.regulation.chunks) if retrieval.regulation else 0,
+            sorted(supported_regulation_pairs(retrieval.sources)),
+        )
         answer = self.generate(question, understanding, retrieval, state, profile)
+        logger.info(
+            "Generated citation diagnostics: recognized=%s citation_like=%s",
+            [(item.clause, item.page) for item in extract_regulation_citations(answer)],
+            citation_like_fragments(answer),
+        )
+        answer = canonicalize_generated_citations(answer)
         requires_citation = bool(retrieval.vector_context)
         if not validate_generated_answer(answer, retrieval.sources, requires_citation):
             try:
                 answer = self._repair_citations(answer, question, retrieval, profile)
+                answer = canonicalize_generated_citations(answer)
             except (LLMConfigError, LLMRequestError) as exc:
                 logger.error("Citation repair failed: %s", exc)
         if not validate_generated_answer(answer, retrieval.sources, requires_citation):

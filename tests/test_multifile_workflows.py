@@ -13,6 +13,15 @@ from main import app
 from api import routes
 
 
+def test_empty_ifc_filters_mean_all():
+    for selection in (None, [], [""], ["  "]):
+        assert extract_graph._normalize_optional_filter(selection) is None
+
+
+def test_nonempty_ifc_filter_remains_a_trimmed_subset():
+    assert extract_graph._normalize_optional_filter([" Level 6 ", "IfcWall"]) == ["Level 6", "IfcWall"]
+
+
 def coordinate_record(name, *, scale=1.0, project="project-guid", context=None):
     return {
         "filename": name,
