@@ -48,3 +48,5 @@ rag/inspect_chroma.py
 # Configuration
 pytest.ini
 *.ini
+
+opencode.json
