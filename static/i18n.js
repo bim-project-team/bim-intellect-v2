@@ -44,6 +44,8 @@
       "common.loading": "Loading…",
       "common.error": "Error",
       "common.unknownError": "Unknown error",
+      "common.close": "Close",
+      "common.menu": "Menu",
 
       "chat.welcomeTitle": "Welcome to BIM-Intellect",
       "chat.welcomeBody":
@@ -214,6 +216,8 @@
       "common.loading": "در حال بارگذاری…",
       "common.error": "خطا",
       "common.unknownError": "خطای نامشخص",
+      "common.close": "بستن",
+      "common.menu": "منو",
 
       "chat.welcomeTitle": "به BIM-Intellect خوش آمدید",
       "chat.welcomeBody":

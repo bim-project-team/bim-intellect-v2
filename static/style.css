@@ -87,16 +87,47 @@ h1, h2, h3, h4 {
 }
 
 /* --------------------------------------------------------------------------
-   Sidebar
+   Sidebar — an overlay drawer at every viewport width.
+   It sits outside the flex flow (position: fixed) and is translated off the
+   inline-start edge until .open is set, so the workspace always occupies the
+   full width and nothing reflows when the drawer opens or closes.
    -------------------------------------------------------------------------- */
 
 .sidebar {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: 60;
   width: var(--sidebar-w);
+  max-width: 86vw;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface);
   border-inline-end: 1px solid var(--border);
+  box-shadow: 6px 0 0 rgba(17, 17, 17, 0.05);
+  /* translateX(-100%) is physical, so RTL needs the mirrored value (below). */
+  transform: translateX(-100%);
+  transition: transform 0.2s ease-out;
+}
+
+html[dir="rtl"] .sidebar {
+  transform: translateX(100%);
+  box-shadow: -6px 0 0 rgba(17, 17, 17, 0.05);
+}
+
+.sidebar.open,
+html[dir="rtl"] .sidebar.open {
+  transform: translateX(0);
+}
+
+/* Keyboard focus must not land inside a closed drawer. */
+.sidebar:not(.open) {
+  visibility: hidden;
+}
+
+.sidebar.open {
+  visibility: visible;
 }
 
 .sidebar-brand {
@@ -105,6 +136,25 @@ h1, h2, h3, h4 {
   gap: 0.7rem;
   padding: 1.15rem 1.15rem 1rem;
   border-block-end: 1px solid var(--border-light);
+}
+
+/* In-drawer dismiss button, for both the sidebar and the context rail. */
+.drawer-close {
+  margin-inline-start: auto;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 0.25rem;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-light);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.drawer-close:hover {
+  border-color: var(--border-light);
+  color: var(--fg);
 }
 
 /* The monogram mark. */
@@ -335,9 +385,11 @@ h1, h2, h3, h4 {
   display: flex;
 }
 
-/* Sidebar toggle — only shown on narrow viewports. */
-.sidebar-toggle {
-  display: none;
+/* Drawer triggers — always visible now that both panels are overlays. */
+.sidebar-toggle,
+.rail-toggle {
+  display: inline-grid;
+  place-items: center;
   padding: 0.35rem;
   background: var(--bg);
   color: var(--fg);
@@ -346,8 +398,20 @@ h1, h2, h3, h4 {
   line-height: 0;
 }
 
-.sidebar-toggle:hover {
+.sidebar-toggle:hover,
+.rail-toggle:hover {
   background: var(--surface);
+}
+
+/* Pressed state marks an open drawer, so the trigger reads as a toggle. */
+.sidebar-toggle[aria-expanded="true"],
+.rail-toggle[aria-expanded="true"] {
+  background: var(--surface-dark);
+  color: var(--bg);
+}
+
+.rail-toggle.hidden {
+  display: none;
 }
 
 .status-pill {
@@ -997,29 +1061,64 @@ html[dir="rtl"] #chat-send svg {
   text-align: center;
 }
 
-/* --- Context rail --- */
+/* --- Context rail ---
+   Mirror of the sidebar: an overlay drawer on the inline-end edge, opened from
+   the header. Kept out of the flex flow so opening it never reflows the chat
+   column (which would otherwise re-wrap every message mid-conversation). */
 
 .context-rail {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 60;
   width: var(--rail-w);
+  max-width: 88vw;
   flex-shrink: 0;
-  border-inline-start: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  border-inline-start: 1px solid var(--border);
   background: var(--surface);
+  box-shadow: -6px 0 0 rgba(17, 17, 17, 0.05);
   overflow-y: auto;
   padding: 1.25rem 1.15rem;
+  transform: translateX(100%);
+  transition: transform 0.2s ease-out;
+  visibility: hidden;
 }
 
+html[dir="rtl"] .context-rail {
+  transform: translateX(-100%);
+  box-shadow: 6px 0 0 rgba(17, 17, 17, 0.05);
+}
+
+.context-rail.open,
+html[dir="rtl"] .context-rail.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+/* .hidden (non-chat tabs) must beat .open, hence the extra specificity here;
+   the utility rule at the end of the file carries !important for the same
+   reason. */
 .context-rail.hidden {
   display: none;
 }
 
 .context-rail h3 {
-  margin: 0 0 0.9rem;
-  padding-block-end: 0.5rem;
-  border-block-end: 1px solid var(--border-light);
+  margin: 0;
   font-size: 0.78rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-muted);
+}
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block-end: 0.9rem;
+  padding-block-end: 0.5rem;
+  border-block-end: 1px solid var(--border-light);
 }
 
 .meta-content {
@@ -1065,11 +1164,8 @@ html[dir="rtl"] #chat-send svg {
   font-size: 0.7rem;
 }
 
-@media (max-width: 1180px) {
-  .context-rail {
-    display: none;
-  }
-}
+/* The rail is a drawer at every width now, so it no longer has to be hidden
+   on narrower viewports — it simply overlays the chat column. */
 
 /* ==========================================================================
    Model toggle (chat header)
@@ -1700,45 +1796,29 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 }
 
 /* ==========================================================================
-   Responsive: sidebar becomes an overlay
+   Drawer scrim + responsive padding
    ========================================================================== */
 
+/* One scrim serves both drawers; whichever is open sets .open on it. */
 .sidebar-scrim {
   display: none;
 }
 
+.sidebar-scrim.open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(17, 17, 17, 0.32);
+  animation: scrim-in 0.18s ease-out;
+}
+
+@keyframes scrim-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 @media (max-width: 860px) {
-  .sidebar {
-    position: fixed;
-    inset-block: 0;
-    inset-inline-start: 0;
-    z-index: 60;
-    transform: translateX(-100%);
-    transition: transform 0.18s ease-out;
-  }
-
-  html[dir="rtl"] .sidebar {
-    transform: translateX(100%);
-  }
-
-  .sidebar.open,
-  html[dir="rtl"] .sidebar.open {
-    transform: translateX(0);
-  }
-
-  .sidebar-toggle {
-    display: inline-grid;
-    place-items: center;
-  }
-
-  .sidebar-scrim.open {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    background: rgba(17, 17, 17, 0.35);
-  }
-
   .tab-scroll {
     padding: 1rem;
   }
@@ -1763,6 +1843,18 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 @media (max-width: 560px) {
   .status-pill {
     display: none;
+  }
+}
+
+/* Users who prefer reduced motion get an instant open/close, no slide. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .context-rail {
+    transition: none;
+  }
+
+  .sidebar-scrim.open {
+    animation: none;
   }
 }
 

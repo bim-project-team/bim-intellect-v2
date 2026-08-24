@@ -210,9 +210,12 @@ const tabContents = document.querySelectorAll(".tab-content");
 const sidebar = document.getElementById("sidebar");
 const sidebarScrim = document.getElementById("sidebar-scrim");
 const sidebarToggle = document.getElementById("sidebar-toggle");
+const sidebarClose = document.getElementById("sidebar-close");
 const workspaceTitle = document.getElementById("workspace-title");
 const workspaceSubtitle = document.getElementById("workspace-subtitle");
 const contextRail = document.getElementById("context-rail");
+const railToggle = document.getElementById("rail-toggle");
+const railClose = document.getElementById("rail-close");
 const modelToggleWrap = document.getElementById("model-toggle-wrap");
 
 const chatMessages = document.getElementById("chat-messages");
@@ -260,7 +263,7 @@ const clearCorpusBtn = document.getElementById("clear-corpus-btn");
 const corpusInfo = document.getElementById("corpus-info");
 
 // ------------------------------------------------------------------
-// Navigation (sidebar)
+// Navigation + drawers
 // ------------------------------------------------------------------
 
 // The workspace header mirrors the active section, so the title/subtitle keys
@@ -282,21 +285,70 @@ function syncWorkspaceHeader() {
   workspaceSubtitle.textContent = t(meta.subtitle);
 
   // The context rail and the model toggle belong to the chat view only.
-  contextRail.classList.toggle("hidden", activeNav !== "chat");
-  modelToggleWrap.classList.toggle("hidden", activeNav !== "chat");
+  const onChat = activeNav === "chat";
+  modelToggleWrap.classList.toggle("hidden", !onChat);
+  railToggle.classList.toggle("hidden", !onChat);
+  contextRail.classList.toggle("hidden", !onChat);
+  // Leaving chat must also close the rail, otherwise it would reappear
+  // still-open when the user comes back.
+  if (!onChat) closeDrawer(contextRail, railToggle);
 }
 
-function closeSidebar() {
-  sidebar.classList.remove("open");
-  sidebarScrim.classList.remove("open");
+// --- Drawer plumbing ------------------------------------------------
+// Both panels are overlays: the sidebar on the inline-start edge, the analysis
+// context on the inline-end edge. They share one scrim, and only one may be
+// open at a time so the scrim's click target is never ambiguous.
+
+const DRAWERS = []; // populated below, after both elements are known
+
+function isOpen(panel) {
+  return panel.classList.contains("open");
 }
 
-sidebarToggle.addEventListener("click", () => {
-  sidebar.classList.toggle("open");
-  sidebarScrim.classList.toggle("open", sidebar.classList.contains("open"));
+function syncScrim() {
+  sidebarScrim.classList.toggle("open", DRAWERS.some(([panel]) => isOpen(panel)));
+}
+
+function closeDrawer(panel, trigger) {
+  panel.classList.remove("open");
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  syncScrim();
+}
+
+function closeAllDrawers() {
+  DRAWERS.forEach(([panel, trigger]) => closeDrawer(panel, trigger));
+}
+
+function openDrawer(panel, trigger) {
+  // Close the other one first — two overlapping drawers plus one scrim would
+  // leave the second unreachable by click-outside.
+  DRAWERS.forEach(([other, otherTrigger]) => {
+    if (other !== panel) closeDrawer(other, otherTrigger);
+  });
+  panel.classList.add("open");
+  if (trigger) trigger.setAttribute("aria-expanded", "true");
+  syncScrim();
+}
+
+function toggleDrawer(panel, trigger) {
+  if (isOpen(panel)) closeDrawer(panel, trigger);
+  else openDrawer(panel, trigger);
+}
+
+DRAWERS.push([sidebar, sidebarToggle], [contextRail, railToggle]);
+
+sidebarToggle.addEventListener("click", () => toggleDrawer(sidebar, sidebarToggle));
+railToggle.addEventListener("click", () => toggleDrawer(contextRail, railToggle));
+
+sidebarClose.addEventListener("click", () => closeDrawer(sidebar, sidebarToggle));
+railClose.addEventListener("click", () => closeDrawer(contextRail, railToggle));
+
+sidebarScrim.addEventListener("click", closeAllDrawers);
+
+// Escape closes whichever drawer is open — expected of any overlay panel.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAllDrawers();
 });
-
-sidebarScrim.addEventListener("click", closeSidebar);
 
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -311,8 +363,10 @@ navButtons.forEach((btn) => {
     if (targetEl) targetEl.classList.add("active");
 
     activeNav = target;
+    // Order matters: syncWorkspaceHeader() may close the rail, and closing the
+    // sidebar afterwards leaves the scrim in the correct state either way.
     syncWorkspaceHeader();
-    closeSidebar();
+    closeDrawer(sidebar, sidebarToggle);
 
     // Auto-load corpus status when opening that tab
     if (target === "corpus") {

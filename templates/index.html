@@ -21,13 +21,13 @@
 
   <div class="app-shell">
 
-    <!-- Closes the sidebar when it overlays on narrow viewports. -->
+    <!-- Shared by both drawers; clicking it closes whichever is open. -->
     <div class="sidebar-scrim" id="sidebar-scrim"></div>
 
     <!-- ======================================================================
-         SIDEBAR
+         SIDEBAR — overlay drawer, opened from the header toggle
          ====================================================================== -->
-    <aside class="sidebar" id="sidebar">
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
 
       <div class="sidebar-brand">
         <span class="brand-monogram" aria-hidden="true">BI</span>
@@ -38,6 +38,9 @@
           </div>
           <p class="brand-tagline" data-i18n="brand.tagline">Regulatory compliance agent</p>
         </div>
+        <button class="drawer-close" id="sidebar-close" data-i18n-title="common.close" title="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
 
       <div class="sidebar-section">
@@ -85,7 +88,9 @@
     <div class="workspace">
 
       <header class="workspace-header">
-        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle navigation">
+        <button class="sidebar-toggle" id="sidebar-toggle"
+                aria-controls="sidebar" aria-expanded="false"
+                data-i18n-title="common.menu" title="Menu">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
 
@@ -106,6 +111,13 @@
             <span class="status-dot" aria-hidden="true"></span>
             <span data-i18n="status.ready">Ready</span>
           </span>
+
+          <!-- Opens the analysis-context drawer. Chat-only, like the toggle above. -->
+          <button class="rail-toggle" id="rail-toggle"
+                  aria-controls="context-rail" aria-expanded="false"
+                  data-i18n-title="chat.contextTitle" title="Analysis context">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+          </button>
         </div>
       </header>
 
@@ -173,8 +185,13 @@
 
           </div>
 
-          <aside class="context-rail" id="context-rail">
-            <h3 data-i18n="chat.contextTitle">Analysis context</h3>
+          <aside class="context-rail" id="context-rail" aria-label="Analysis context">
+            <div class="rail-header">
+              <h3 data-i18n="chat.contextTitle">Analysis context</h3>
+              <button class="drawer-close" id="rail-close" data-i18n-title="common.close" title="Close">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
             <div id="chat-meta" class="meta-content">
               <p class="hint" data-i18n="chat.contextEmpty">
                 Send a message to see which retrieval paths the orchestrator selects.
