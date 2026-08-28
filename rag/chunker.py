@@ -1,6 +1,6 @@
 """
-Chunks a regulatory PDF into overlapping text segments for embedding.
-Each chunk retains a traceable clause reference for citation integrity.
+Chunks regulatory PDFs into structure-aware text segments for embedding.
+Each chunk retains traceable clause/page metadata and continuation links.
 
 Supports multiple regulation PDFs, not just a single hardcoded document.
 Each PDF can use a different top-level chapter/clause number (e.g. Mabhas 15
@@ -16,9 +16,9 @@ This version merges two prior iterations:
    same code works across Mabhas 15, Mabhas 4, etc. without hardcoding.
 2. More accurate clause detection/segmentation (originally prototyped in
    chunker_robust.py):
-   - Pages are split into per-clause SEGMENTS *before* 800-char chunking
+   - Pages are split into per-clause SEGMENTS before bounded chunking
      happens. Previously, chunk boundaries were character-based only, so
-     a single 800-char window could start under clause 15-1-2 and run
+     a single raw window could start under clause 15-1-2 and run
      into the text of 15-1-3 - guess_clause_id() would then (correctly,
      but confusingly) label the whole window with whichever clause number
      appeared *last* in the window, silently mis-attributing the leading
@@ -66,6 +66,7 @@ New in this version (from chunker_robust.py):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
@@ -98,6 +99,19 @@ class Chunk:
     page_number: int
     clause_id: str | None
     source: str = ""
+    document_id: str = ""
+    document_title: str = ""
+    chapter: str = ""
+    section_id: str = ""
+    heading: str = ""
+    chunk_index: int = 0
+    section_chunk_index: int = 0
+    previous_chunk_id: str = ""
+    next_chunk_id: str = ""
+    previous_section_chunk_id: str = ""
+    next_section_chunk_id: str = ""
+    content_hash: str = ""
+    is_toc: bool = False
 
 
 @dataclass
@@ -108,6 +122,7 @@ class PageDiagnostic:
     clause_match_found: bool
     detected_clause_ids: list[str] = field(default_factory=list)
     extraction_error: str | None = None
+    is_toc: bool = False
 
 
 @dataclass
@@ -436,7 +451,7 @@ def extract_text_by_page(pdf_path: str | Path) -> list[tuple[int, str, str | Non
 # CHUNKING
 # ============================================================================
 
-def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 0) -> list[str]:
     """Sliding-window chunking by character count.
 
     Stops cleanly at the end of `text` instead of emitting a near-empty
@@ -462,6 +477,98 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str
         start += step
 
     return result
+
+
+_LIST_ITEM_PATTERN = re.compile(
+    r"^(?:[-•●▪]\s+|\d+\s*[-.)]\s*|[الفبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی]\s*[-–—]\s*)"
+)
+
+
+def _logical_blocks(text: str) -> list[str]:
+    """Group wrapped PDF lines without merging distinct numbered/list items."""
+    blocks: list[str] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                blocks.append(" ".join(current).strip())
+                current = []
+            continue
+        starts_item = bool(_LIST_ITEM_PATTERN.match(line))
+        if starts_item and current:
+            blocks.append(" ".join(current).strip())
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(" ".join(current).strip())
+    return [block for block in blocks if block]
+
+
+def chunk_structured_text(text: str, chunk_size: int = 1200) -> list[str]:
+    """Pack paragraphs/list items without splitting a logical item when possible."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+    blocks = _logical_blocks(text)
+    if not blocks:
+        return []
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        if len(block) > chunk_size:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(chunk_text(block, chunk_size=chunk_size, overlap=0))
+            continue
+        proposed = block if not current else f"{current}\n{block}"
+        if len(proposed) <= chunk_size:
+            current = proposed
+        else:
+            chunks.append(current)
+            current = block
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _extract_heading(segment_text: str, clause_id: str | None) -> str:
+    """Keep a best-effort extracted heading; never synthesize one."""
+    first_line = next((line.strip() for line in segment_text.splitlines() if line.strip()), "")
+    if clause_id and first_line:
+        first_line = re.sub(r"^\s*\d+(?:\s*[-.]\s*\d+)+\s*[-.]?\s*", "", first_line)
+    return first_line[:200].strip()
+
+
+def _looks_like_toc(
+    page_text: str,
+    clause_ids: list[str],
+    page_number: int,
+    total_pages: int,
+) -> bool:
+    """Detect dense heading-only contents pages conservatively."""
+    if len(clause_ids) < 8:
+        return False
+    front_matter_limit = max(15, int(total_pages * 0.20))
+    return (
+        page_number <= front_matter_limit
+        and len(page_text.strip()) / max(len(clause_ids), 1) < 180
+    )
+
+
+def _finalize_chunk_links(chunks: list[Chunk]) -> None:
+    for index, chunk in enumerate(chunks):
+        chunk.chunk_index = index
+        chunk.previous_chunk_id = chunks[index - 1].chunk_id if index else ""
+        chunk.next_chunk_id = chunks[index + 1].chunk_id if index + 1 < len(chunks) else ""
+    grouped: dict[str, list[Chunk]] = {}
+    for chunk in chunks:
+        grouped.setdefault(chunk.section_id, []).append(chunk)
+    for section_chunks in grouped.values():
+        for index, chunk in enumerate(section_chunks):
+            chunk.section_chunk_index = index
+            chunk.previous_section_chunk_id = section_chunks[index - 1].chunk_id if index else ""
+            chunk.next_section_chunk_id = section_chunks[index + 1].chunk_id if index + 1 < len(section_chunks) else ""
 
 
 def _clause_segments(
@@ -515,8 +622,8 @@ def chunk_pdf(
     pdf_path: str | Path,
     doc_id: str = "regulatory",
     source: str | None = None,
-    chunk_size: int = 800,
-    overlap: int = 150,
+    chunk_size: int = 1200,
+    overlap: int = 0,
 ) -> list[Chunk]:
     """Backwards-compatible entry point: returns just the chunk list.
 
@@ -537,8 +644,8 @@ def chunk_pdf_with_diagnostics(
     doc_id: str = "regulatory",
     source: str | None = None,
     chapter_id: str | int | None = None,
-    chunk_size: int = 800,
-    overlap: int = 150,
+    chunk_size: int = 1200,
+    overlap: int = 0,
     skip_appendix: bool = True,
     min_page: int = 1,
 ) -> ChunkResult:
@@ -593,19 +700,40 @@ def chunk_pdf_with_diagnostics(
             previous_clause_id=current_clause_id,
         )
 
+        page_is_toc = _looks_like_toc(
+            page_text,
+            segment_clause_ids,
+            page_number,
+            len(pages),
+        )
+
         for segment_clause_id, segment_text in segments:
             # Segments with no clause ID (front matter before the first
             # numbered clause on a page) are preserved as unlabeled chunks
             # rather than dropped - see module docstring.
             cid = segment_clause_id or None
 
-            for piece in chunk_text(segment_text, chunk_size=chunk_size, overlap=overlap):
+            section_id = cid or f"page-{page_number}"
+            heading = _extract_heading(segment_text, cid)
+            pieces = (
+                chunk_structured_text(segment_text, chunk_size=chunk_size)
+                if overlap == 0
+                else chunk_text(segment_text, chunk_size=chunk_size, overlap=overlap)
+            )
+            for piece in pieces:
                 result_chunks.append(Chunk(
                     chunk_id=f"{doc_id}-p{page_number}-c{counter}",
                     text=piece,
                     page_number=page_number,
                     clause_id=cid,
                     source=source,
+                    document_id=doc_id,
+                    document_title=source,
+                    chapter=(cid.split("-")[0] if cid else (root or "")),
+                    section_id=section_id,
+                    heading=heading,
+                    content_hash=hashlib.sha256(normalize_persian_text(piece).encode("utf-8")).hexdigest(),
+                    is_toc=page_is_toc,
                 ))
                 counter += 1
 
@@ -616,8 +744,10 @@ def chunk_pdf_with_diagnostics(
             clause_match_found=bool(segment_clause_ids),
             detected_clause_ids=segment_clause_ids,
             extraction_error=extraction_error,
+            is_toc=page_is_toc,
         ))
 
+    _finalize_chunk_links(result_chunks)
     return ChunkResult(chunks=result_chunks, pages=diagnostics, detected_clause_root=root)
 
 
@@ -726,8 +856,8 @@ def main() -> None:
         default=None,
         help="Override auto-detection and force this clause root (e.g. '15').",
     )
-    parser.add_argument("--chunk-size", type=int, default=800)
-    parser.add_argument("--overlap", type=int, default=150)
+    parser.add_argument("--chunk-size", type=int, default=1200)
+    parser.add_argument("--overlap", type=int, default=0)
     parser.add_argument("--min-page", type=int, default=1, help="Skip PDF pages before this page (cover/TOC).")
     parser.add_argument("--list-clauses", action="store_true")
     parser.add_argument("--clause", help="Retrieve one exact clause, e.g. 15-1-2")

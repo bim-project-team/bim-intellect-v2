@@ -27,6 +27,8 @@ TYPES_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ifc_types.
 
 
 def _collect_ifc_paths(target):
+    if isinstance(target, (list, tuple, set)):
+        return sorted(str(path) for path in target if os.path.isfile(path))
     if os.path.isdir(target):
         return sorted(glob.glob(os.path.join(target, "*.ifc")))
     if os.path.isfile(target):
@@ -51,6 +53,15 @@ def extract_storeys(model, source_file, storey_rows, seen_names):
 def extract_type_counts(model, counter):
     for entity in model:
         counter[entity.is_a()] += 1
+
+
+def scan_ifc(path):
+    """Return per-file filter metadata and prove that the IFC parses successfully."""
+    model = ifcopenshell.open(str(path))
+    storeys = sorted({(storey.Name or "") for storey in model.by_type("IfcBuildingStorey") if storey.Name})
+    counter = Counter(entity.is_a() for entity in model)
+    types = [{"type": name, "count": count} for name, count in sorted(counter.items(), key=lambda x: (-x[1], x[0]))]
+    return {"schema": model.schema, "storeys": storeys, "types": types}
 
 
 def main(target=None, storeys_csv=STOREYS_CSV, types_csv=TYPES_CSV):

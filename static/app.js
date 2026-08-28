@@ -1,10 +1,28 @@
 // BIM-Intellect Frontend — Chat, Pipeline, Corpus, Results
+//
+// Interface strings come from static/i18n.js via t(). Request URLs, payload
+// keys, and response field names are deliberately untouched by localisation —
+// only what the user reads changes.
+
+// Shorthand for the localiser. Guarded so the app still renders (in English)
+// if i18n.js fails to load for any reason.
+function t(key, vars) {
+  return window.i18n ? window.i18n.t(key, vars) : key;
+}
+
+// Free text of unknown language (model answers, IFC element names, filenames)
+// is emitted with dir="auto" so the browser resolves direction per value.
+// Without this, a Persian element name inside an English interface — or an
+// English name inside a Persian one — renders with its punctuation displaced.
+function autoDir(html) {
+  return `<span dir="auto">${html}</span>`;
+}
 
 // ------------------------------------------------------------------
 // Reusable checkbox-dropdown multiselect widget
 // ------------------------------------------------------------------
 class MultiSelectDropdown {
-  constructor(rootId, { emptyText = "None found" } = {}) {
+  constructor(rootId, { emptyTextKey = "pipeline.noneFound" } = {}) {
     this.root = document.getElementById(rootId);
     if (!this.root) return;
 
@@ -13,7 +31,10 @@ class MultiSelectDropdown {
     this.panel = this.root.querySelector(".multiselect-panel");
     this.optionsEl = this.root.querySelector(".multiselect-options");
     this.searchInput = this.root.querySelector(".multiselect-search");
-    this.emptyText = emptyText;
+    this.emptyTextKey = emptyTextKey;
+    // Remembered so the label/placeholder can be re-rendered in the new
+    // language without the caller having to re-supply it.
+    this.placeholderKey = "pipeline.selectFileFirst";
     this.options = []; // [{value, label, count}]
     this.selected = new Set();
 
@@ -46,7 +67,7 @@ class MultiSelectDropdown {
       if (!this.root.contains(e.target)) this.close();
     });
 
-    this.disable("Select an IFC file first");
+    this.disable("pipeline.selectFileFirst");
   }
 
   isOpen() {
@@ -68,19 +89,39 @@ class MultiSelectDropdown {
     this.panel.classList.add("hidden");
   }
 
-  disable(placeholderText) {
+  disable(placeholderKey) {
     this.options = [];
     this.selected.clear();
+    this.placeholderKey = placeholderKey || this.placeholderKey;
     this.toggleBtn.disabled = true;
-    this.toggleLabel.textContent = placeholderText;
+    this.toggleLabel.textContent = t(this.placeholderKey);
     this.optionsEl.innerHTML = "";
     this.close();
   }
 
+  /** Re-render the visible strings after a language change, preserving both
+   *  the option list and the current selection. */
+  relabel() {
+    if (!this.root) return;
+    if (this.toggleBtn.disabled) {
+      this.toggleLabel.textContent = t(this.placeholderKey);
+    } else {
+      this._updateLabel();
+    }
+    this._renderOptions();
+  }
+
   setOptions(options) {
     // options: [{value, label, count?}]
+    // Preserve the current selection across re-renders (loadIfcProjects()
+    // recomputes the combined storey/type lists whenever the set of selected
+    // models changes; dropping the selection there would silently reset the
+    // user's filters).
+    const previous = new Set(this.selected);
     this.options = options || [];
-    this.selected.clear();
+    this.selected = new Set(
+      this.options.map((o) => o.value).filter((value) => previous.has(value))
+    );
     this.toggleBtn.disabled = this.options.length === 0;
     this._renderOptions();
     this._updateLabel();
@@ -90,6 +131,14 @@ class MultiSelectDropdown {
     return Array.from(this.selected);
   }
 
+  getFilterValue() {
+    // No selection and explicitly selecting every option both mean "all".
+    if (this.selected.size === 0 || this.selected.size === this.options.length) {
+      return null;
+    }
+    return this.getSelected();
+  }
+
   _renderOptions() {
     const filter = this.searchInput ? this.searchInput.value.trim().toLowerCase() : "";
     const visible = filter
@@ -97,22 +146,23 @@ class MultiSelectDropdown {
       : this.options;
 
     if (this.options.length === 0) {
-      this.optionsEl.innerHTML = `<div class="multiselect-empty">${this.emptyText}</div>`;
+      this.optionsEl.innerHTML = `<div class="multiselect-empty">${escapeHtml(t(this.emptyTextKey))}</div>`;
       return;
     }
     if (visible.length === 0) {
-      this.optionsEl.innerHTML = `<div class="multiselect-empty">No matches</div>`;
+      this.optionsEl.innerHTML = `<div class="multiselect-empty">${escapeHtml(t("pipeline.noMatches"))}</div>`;
       return;
     }
 
     this.optionsEl.innerHTML = visible
       .map((o) => {
         const checked = this.selected.has(o.value) ? "checked" : "";
-        const countHtml = o.count !== undefined ? `<span class="option-count">${o.count}</span>` : "";
+        const countHtml = o.count !== undefined ? `<span class="option-count">${Number(o.count)}</span>` : "";
+        // Storey names come from the IFC file and can be in either script.
         return `
           <label class="multiselect-option">
-            <input type="checkbox" value="${o.value}" ${checked} />
-            <span class="option-label">${o.label}</span>
+            <input type="checkbox" value="${escapeHtml(String(o.value))}" ${checked} />
+            <span class="option-label" dir="auto">${escapeHtml(String(o.label))}</span>
             ${countHtml}
           </label>
         `;
@@ -137,14 +187,14 @@ class MultiSelectDropdown {
   _updateLabel() {
     const n = this.selected.size;
     if (this.options.length === 0) {
-      this.toggleLabel.textContent = this.emptyText;
+      this.toggleLabel.textContent = t(this.emptyTextKey);
     } else if (n === 0) {
-      this.toggleLabel.textContent = "All";
+      this.toggleLabel.textContent = t("pipeline.allSelected");
     } else if (n <= 2) {
       const labels = this.options.filter((o) => this.selected.has(o.value)).map((o) => o.label);
       this.toggleLabel.textContent = labels.join(", ");
     } else {
-      this.toggleLabel.textContent = `${n} selected`;
+      this.toggleLabel.textContent = t("pipeline.nSelected", { n: n });
     }
   }
 }
@@ -155,6 +205,9 @@ class MultiSelectDropdown {
 let activeTab = "clashes"; // for results sub-tabs
 let activeNav = "chat";    // for main navigation
 let selectedElementId = null;
+let selectedPdfFiles = [];
+let selectedIfcFileIds = new Set();
+let ifcProjects = [];
 
 // ------------------------------------------------------------------
 // DOM refs
@@ -162,11 +215,31 @@ let selectedElementId = null;
 const navButtons = document.querySelectorAll(".nav-btn");
 const tabContents = document.querySelectorAll(".tab-content");
 
+const sidebar = document.getElementById("sidebar");
+const sidebarScrim = document.getElementById("sidebar-scrim");
+const sidebarToggle = document.getElementById("sidebar-toggle");
+const sidebarClose = document.getElementById("sidebar-close");
+const workspaceTitle = document.getElementById("workspace-title");
+const workspaceSubtitle = document.getElementById("workspace-subtitle");
+const contextRail = document.getElementById("context-rail");
+const railToggle = document.getElementById("rail-toggle");
+const railClose = document.getElementById("rail-close");
+const modelToggleWrap = document.getElementById("model-toggle-wrap");
+
 const chatMessages = document.getElementById("chat-messages");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatSend = document.getElementById("chat-send");
 const chatMeta = document.getElementById("chat-meta");
+const strongModelsToggle = document.getElementById("strong-models-toggle");
+const conversationStorageKey = "bim-intellect-conversation-id";
+let conversationId = sessionStorage.getItem(conversationStorageKey);
+if (!conversationId) {
+  conversationId = window.crypto && window.crypto.randomUUID
+    ? window.crypto.randomUUID()
+    : `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  sessionStorage.setItem(conversationStorageKey, conversationId);
+}
 
 const log = document.getElementById("log");
 const resultsBody = document.getElementById("results-body");
@@ -179,10 +252,11 @@ const ingestSubmitBtn = document.getElementById("ingest-submit");
 const ifcDropZone = document.getElementById("ifc-drop-zone");
 const ifcFileInput = document.getElementById("ifc-file");
 const ifcDropZoneFile = document.getElementById("ifc-drop-zone-file");
-const ifcPathHidden = document.getElementById("ifc_path");
+const projectIdInput = document.getElementById("project-id");
+const ifcModelList = document.getElementById("ifc-model-list");
 
-const ingestStoreyDropdown = new MultiSelectDropdown("ingestStoreyFilter", { emptyText: "No storeys found in this file" });
-const ingestTypeDropdown = new MultiSelectDropdown("ingestTypeFilter", { emptyText: "No types found in this file" });
+const ingestStoreyDropdown = new MultiSelectDropdown("ingestStoreyFilter", { emptyTextKey: "pipeline.noStoreys" });
+const ingestTypeDropdown = new MultiSelectDropdown("ingestTypeFilter", { emptyTextKey: "pipeline.noTypes" });
 
 const dropZone = document.getElementById("drop-zone");
 const pdfFileInput = document.getElementById("pdf-file");
@@ -197,8 +271,93 @@ const clearCorpusBtn = document.getElementById("clear-corpus-btn");
 const corpusInfo = document.getElementById("corpus-info");
 
 // ------------------------------------------------------------------
-// Navigation (main tabs)
+// Navigation + drawers
 // ------------------------------------------------------------------
+
+// The workspace header mirrors the active section, so the title/subtitle keys
+// live here rather than being duplicated in the markup.
+const TAB_HEADERS = {
+  chat: { title: "nav.chat", subtitle: "header.chat" },
+  pipeline: { title: "nav.pipeline", subtitle: "header.pipeline" },
+  results: { title: "nav.results", subtitle: "header.results" },
+  corpus: { title: "nav.corpus", subtitle: "header.corpus" },
+};
+
+function syncWorkspaceHeader() {
+  const meta = TAB_HEADERS[activeNav] || TAB_HEADERS.chat;
+  // data-i18n is rewritten too, so a later language change re-renders the
+  // header for whichever tab is open rather than reverting to Chat.
+  workspaceTitle.setAttribute("data-i18n", meta.title);
+  workspaceTitle.textContent = t(meta.title);
+  workspaceSubtitle.setAttribute("data-i18n", meta.subtitle);
+  workspaceSubtitle.textContent = t(meta.subtitle);
+
+  // The context rail and the model toggle belong to the chat view only.
+  const onChat = activeNav === "chat";
+  modelToggleWrap.classList.toggle("hidden", !onChat);
+  railToggle.classList.toggle("hidden", !onChat);
+  contextRail.classList.toggle("hidden", !onChat);
+  // Leaving chat must also close the rail, otherwise it would reappear
+  // still-open when the user comes back.
+  if (!onChat) closeDrawer(contextRail, railToggle);
+}
+
+// --- Drawer plumbing ------------------------------------------------
+// Both panels are overlays: the sidebar on the inline-start edge, the analysis
+// context on the inline-end edge. They share one scrim, and only one may be
+// open at a time so the scrim's click target is never ambiguous.
+
+const DRAWERS = []; // populated below, after both elements are known
+
+function isOpen(panel) {
+  return panel.classList.contains("open");
+}
+
+function syncScrim() {
+  sidebarScrim.classList.toggle("open", DRAWERS.some(([panel]) => isOpen(panel)));
+}
+
+function closeDrawer(panel, trigger) {
+  panel.classList.remove("open");
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  syncScrim();
+}
+
+function closeAllDrawers() {
+  DRAWERS.forEach(([panel, trigger]) => closeDrawer(panel, trigger));
+}
+
+function openDrawer(panel, trigger) {
+  // Close the other one first — two overlapping drawers plus one scrim would
+  // leave the second unreachable by click-outside.
+  DRAWERS.forEach(([other, otherTrigger]) => {
+    if (other !== panel) closeDrawer(other, otherTrigger);
+  });
+  panel.classList.add("open");
+  if (trigger) trigger.setAttribute("aria-expanded", "true");
+  syncScrim();
+}
+
+function toggleDrawer(panel, trigger) {
+  if (isOpen(panel)) closeDrawer(panel, trigger);
+  else openDrawer(panel, trigger);
+}
+
+DRAWERS.push([sidebar, sidebarToggle], [contextRail, railToggle]);
+
+sidebarToggle.addEventListener("click", () => toggleDrawer(sidebar, sidebarToggle));
+railToggle.addEventListener("click", () => toggleDrawer(contextRail, railToggle));
+
+sidebarClose.addEventListener("click", () => closeDrawer(sidebar, sidebarToggle));
+railClose.addEventListener("click", () => closeDrawer(contextRail, railToggle));
+
+sidebarScrim.addEventListener("click", closeAllDrawers);
+
+// Escape closes whichever drawer is open — expected of any overlay panel.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAllDrawers();
+});
+
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const target = btn.dataset.tab;
@@ -212,10 +371,17 @@ navButtons.forEach((btn) => {
     if (targetEl) targetEl.classList.add("active");
 
     activeNav = target;
+    // Order matters: syncWorkspaceHeader() may close the rail, and closing the
+    // sidebar afterwards leaves the scrim in the correct state either way.
+    syncWorkspaceHeader();
+    closeDrawer(sidebar, sidebarToggle);
 
     // Auto-load corpus status when opening that tab
     if (target === "corpus") {
       loadCorpusStatus();
+    }
+    if (target === "pipeline") {
+      loadIfcProjects();
     }
 
     // Refresh Results tab filter options (Neo4j-backed) each time it's opened,
@@ -232,16 +398,32 @@ navButtons.forEach((btn) => {
 // ------------------------------------------------------------------
 
 function escapeHtml(str) {
-  if (!str) return "";
-  return str
+  if (str === null || str === undefined) return "";
+  return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function formatTime() {
-  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Persian locale renders its own numerals, matching the rest of the UI.
+  const locale = window.i18n && window.i18n.lang === "fa" ? "fa-IR" : "en-GB";
+  return new Date().toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}
+
+function containsRtlText(text) {
+  // Hebrew, Arabic, Arabic Supplement/Extended, and presentation forms.
+  // Persian code points are covered by these Unicode blocks.
+  return /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]/u.test(String(text || ""));
+}
+
+function applyTextDirection(element, text) {
+  const isRtl = containsRtlText(text);
+  element.dir = isRtl ? "rtl" : "ltr";
+  element.classList.toggle("rtl", isRtl);
+  element.classList.toggle("ltr", !isRtl);
 }
 
 function appendChatMessage(role, text, sources) {
@@ -254,13 +436,14 @@ function appendChatMessage(role, text, sources) {
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
+  applyTextDirection(bubble, text);
   // Preserve line breaks in assistant responses
   bubble.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
   msgDiv.appendChild(bubble);
 
   const meta = document.createElement("div");
   meta.className = "chat-meta-line";
-  meta.textContent = `${role === "user" ? "You" : "Assistant"} — ${formatTime()}`;
+  meta.textContent = `${role === "user" ? t("chat.you") : t("chat.assistant")} — ${formatTime()}`;
   msgDiv.appendChild(meta);
 
   if (sources && sources.length > 0) {
@@ -271,16 +454,16 @@ function appendChatMessage(role, text, sources) {
       tag.className = `chat-source-tag ${src.type || "regulation"}`;
       if (src.type === "regulation") {
         tag.textContent =
-          `Clause ${src.clause_id || "?"}, Page ${src.page_number || "?"}`;
+          `${t("chat.clause")} ${src.clause_id || "?"}, ${t("chat.page")} ${src.page_number || "?"}`;
 
         tag.title =
-          `Source: ${src.source || "Regulation"} | Page ${src.page_number || "?"}`;
+          `${t("chat.source")}: ${src.source || t("chat.regulation")} | ${t("chat.page")} ${src.page_number || "?"}`;
       } else if (src.type === "graph") {
         tag.textContent =
-          `${src.ifc_type || "Element"} ${src.name || src.element_id || ""}`;
+          `${src.ifc_type || t("chat.element")} ${src.name || src.element_id || ""}`;
 
         tag.title =
-          `Element ID: ${src.element_id || "?"}`;
+          `${t("chat.elementId")}: ${src.element_id || "?"}`;
       } else {
         tag.textContent = JSON.stringify(src);
       }
@@ -292,6 +475,8 @@ function appendChatMessage(role, text, sources) {
   chatMessages.appendChild(msgDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
+
+chatInput.addEventListener("input", () => applyTextDirection(chatInput, chatInput.value));
 
 function showTypingIndicator() {
   const welcome = chatMessages.querySelector(".chat-welcome");
@@ -325,6 +510,7 @@ async function sendChat(question) {
 
   appendChatMessage("user", question);
   chatInput.value = "";
+  applyTextDirection(chatInput, "");
   chatInput.disabled = true;
   chatSend.disabled = true;
   showTypingIndicator();
@@ -333,6 +519,8 @@ async function sendChat(question) {
     const payload = {
       question: question.trim(),
       selected_element_id: selectedElementId,
+      conversation_id: conversationId,
+      use_strong_models: Boolean(strongModelsToggle && strongModelsToggle.checked),
     };
 
     console.log("Sending /api/ask:", payload);
@@ -355,13 +543,17 @@ async function sendChat(question) {
     }
 
     hideTypingIndicator();
-    appendChatMessage("assistant", data.answer || "(no answer)", data.sources);
+    if (data.conversation_id) {
+      conversationId = data.conversation_id;
+      sessionStorage.setItem(conversationStorageKey, conversationId);
+    }
+    appendChatMessage("assistant", data.answer || t("chat.noAnswer"), data.sources);
 
     // Update sidebar
     updateChatMeta(data);
   } catch (err) {
     hideTypingIndicator();
-    appendChatMessage("assistant", `Network error: ${err.message}`);
+    appendChatMessage("assistant", `${t("chat.networkError")}: ${err.message}`);
   } finally {
     chatInput.disabled = false;
     chatSend.disabled = false;
@@ -371,52 +563,71 @@ async function sendChat(question) {
 
 function updateChatMeta(data) {
   const parts = [];
-  if (data.used_vector) parts.push("Regulations");
-  if (data.used_graph) parts.push("Building Graph");
+  if (data.used_vector) parts.push(t("chat.sourceRegulations"));
+  if (data.used_graph) parts.push(t("chat.sourceGraph"));
 
-  let html = `<p class="hint">Sources consulted:</p>`;
+  let html = `<p class="hint">${escapeHtml(t("chat.sourcesConsulted"))}:</p>`;
   if (parts.length === 0) {
-    html += `<p class="hint">None — no relevant data found.</p>`;
+    html += `<p class="hint">${escapeHtml(t("chat.sourcesNone"))}</p>`;
   } else {
-    html += `<ul style="margin:0;padding-left:1.2rem;font-size:0.8rem;">`;
+    html += `<ul>`;
     parts.forEach((p) => {
-      html += `<li>${p}</li>`;
+      html += `<li>${escapeHtml(p)}</li>`;
     });
     html += `</ul>`;
   }
 
   if (data.sources && data.sources.length > 0) {
-    html += `<p class="hint" style="margin-top:0.75rem;">Citations (${data.sources.length}):</p>`;
-    html += `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;">`;
+    html += `<p class="hint rail-section">${escapeHtml(t("chat.citations"))} (${data.sources.length}):</p>`;
+    html += `<div class="rail-tags">`;
     data.sources.forEach((src) => {
       if (src.type === "regulation") {
-        const clause = escapeHtml(String(src.clause_id || "?"));
-        const page = escapeHtml(String(src.page_number || "?"));
-        const source = escapeHtml(String(src.source || "Regulation"));
+        const clause = escapeHtml(src.clause_id || "?");
+        const page = escapeHtml(src.page_number || "?");
+        const source = escapeHtml(src.source || t("chat.regulation"));
 
         html += `
           <span
             class="chat-source-tag regulation"
-            title="Source: ${source} | Page ${page}">
-            Clause ${clause}, Page ${page}
+            title="${escapeHtml(t("chat.source"))}: ${source} | ${escapeHtml(t("chat.page"))} ${page}">
+            ${escapeHtml(t("chat.clause"))} ${clause}, ${escapeHtml(t("chat.page"))} ${page}
           </span>
         `;
       } else if (src.type === "graph") {
-        const elementId = escapeHtml(String(src.element_id || ""));
-        const label = escapeHtml(
-          String(src.ifc_type || src.name || "Element")
-        );
+        const elementId = escapeHtml(src.element_id || "");
+        const label = escapeHtml(src.ifc_type || src.name || t("chat.element"));
 
         html += `
           <span
             class="chat-source-tag graph"
-            title="Element ID: ${elementId}">
+            title="${escapeHtml(t("chat.elementId"))}: ${elementId}">
             ${label}
           </span>
         `;
       }
     });
     html += `</div>`;
+  }
+
+  if (data.model_mode) {
+    const mode = escapeHtml(data.model_mode);
+    const routerModel = escapeHtml(data.router_model || "");
+    const finalModel = escapeHtml(data.final_model || "");
+    html += `<p class="hint rail-section">${escapeHtml(t("chat.modelMode"))}: <strong>${mode}</strong></p>`;
+    // Model slugs are identifiers — keep them LTR in both locales.
+    html += `<p class="hint" dir="ltr">${escapeHtml(t("chat.router"))}: ${routerModel}<br>${escapeHtml(t("chat.final"))}: ${finalModel}</p>`;
+  }
+  const debug = data.retrieval_debug || {};
+  if (data.rewritten_query) {
+    html += `<p class="hint rail-section">${escapeHtml(t("chat.interpretedQuery"))}:</p>`;
+    html += `<p class="chat-debug-query" dir="auto">${escapeHtml(data.rewritten_query)}</p>`;
+  }
+  if (debug.final_context_chunks !== undefined) {
+    html += `<p class="hint">${escapeHtml(t("chat.retrievalStats", {
+      candidates: Number(debug.vector_candidates || 0),
+      reranked: Number(debug.reranked_results || 0),
+      chunks: Number(debug.final_context_chunks || 0),
+    }))}</p>`;
   }
 
   chatMeta.innerHTML = html;
@@ -427,10 +638,12 @@ chatForm.addEventListener("submit", (e) => {
   sendChat(chatInput.value);
 });
 
-// Example question buttons
+// Example question buttons. Each carries an English and a Persian phrasing so
+// the sample sent to the backend matches the language the user is reading.
 document.querySelectorAll(".example-q").forEach((btn) => {
   btn.addEventListener("click", () => {
-    const q = btn.dataset.q;
+    const fa = btn.dataset.qFa;
+    const q = window.i18n && window.i18n.lang === "fa" && fa ? fa : btn.dataset.q;
     if (q) sendChat(q);
   });
 });
@@ -439,16 +652,12 @@ document.querySelectorAll(".example-q").forEach((btn) => {
 // PDF Upload (drag & drop + click)
 // ------------------------------------------------------------------
 
-let selectedFile = null;
-
 dropZone.addEventListener("click", () => pdfFileInput.click());
 
 pdfFileInput.addEventListener("change", () => {
-  if (pdfFileInput.files && pdfFileInput.files[0]) {
-    selectedFile = pdfFileInput.files[0];
-    dropZoneFile.textContent = selectedFile.name;
-    dropZone.classList.add("has-file");
-  }
+  selectedPdfFiles = Array.from(pdfFileInput.files || []).filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+  renderSelectedFileNames(dropZoneFile, selectedPdfFiles);
+  dropZone.classList.toggle("has-file", selectedPdfFiles.length > 0);
 });
 
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -467,19 +676,28 @@ pdfFileInput.addEventListener("change", () => {
 });
 
 dropZone.addEventListener("drop", (e) => {
-  const files = e.dataTransfer.files;
-  if (files && files[0] && files[0].name.toLowerCase().endsWith(".pdf")) {
-    selectedFile = files[0];
-    dropZoneFile.textContent = selectedFile.name;
+  const files = Array.from(e.dataTransfer.files || []);
+  const valid = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+  if (valid.length > 0 && valid.length === files.length) {
+    selectedPdfFiles = valid;
+    renderSelectedFileNames(dropZoneFile, selectedPdfFiles);
     dropZone.classList.add("has-file");
-    // Sync to hidden input so form submission works
     const dt = new DataTransfer();
-    dt.items.add(selectedFile);
+    valid.forEach((item) => dt.items.add(item));
     pdfFileInput.files = dt.files;
   } else {
-    showUploadStatus("Only PDF files are accepted.", true);
+    showUploadStatus(t("corpus.allMustBePdf"), true);
   }
 });
+
+function renderSelectedFileNames(target, files) {
+  target.textContent = files.length
+    ? t("corpus.selectedFiles", {
+        n: files.length,
+        names: files.map((file) => file.name).join(", "),
+      })
+    : "";
+}
 
 function showUploadStatus(text, isError) {
   uploadStatusText.textContent = text;
@@ -491,24 +709,43 @@ function hideUploadStatus() {
   uploadStatus.classList.add("hidden");
 }
 
+function formatApiError(detail, fallback = "Unknown error") {
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => {
+      if (typeof item === "string") return item;
+      const location = Array.isArray(item.loc) ? item.loc.join(" → ") : "request";
+      return `${location}: ${item.msg || JSON.stringify(item)}`;
+    }).join("; ");
+  }
+  return detail.message || JSON.stringify(detail);
+}
+
 uploadForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const file = pdfFileInput.files[0];
-  if (!file) {
-    showUploadStatus("Please select a PDF file first.", true);
+  const files = Array.from(pdfFileInput.files || []);
+  if (!files.length) {
+    showUploadStatus(t("corpus.selectPdf"), true);
     return;
   }
 
   uploadSubmit.disabled = true;
-  showUploadStatus("Uploading and embedding... please wait.");
+  showUploadStatus(t("corpus.processing", { n: files.length }));
 
   const formData = new FormData();
-  formData.append("file", file);
+  if (files.length === 1) {
+    // The scalar field works with older FastAPI/Pydantic combinations too.
+    formData.append("file", files[0]);
+  } else {
+    files.forEach((item) => formData.append("files", item));
+  }
   const docId = document.getElementById("doc-id").value.trim();
-  if (docId) formData.append("doc_id", docId);
+  const uploadUrl = new URL("/api/rag/upload", window.location.origin);
+  if (docId && files.length === 1) uploadUrl.searchParams.set("doc_id", docId);
 
   try {
-    const response = await fetch("/api/rag/upload", {
+    const response = await fetch(uploadUrl, {
       method: "POST",
       body: formData,
     });
@@ -517,18 +754,23 @@ uploadForm.addEventListener("submit", async (e) => {
     }));
 
     if (!response.ok) {
-      showUploadStatus(`Upload failed: ${data.detail || "Unknown error"}`, true);
+      showUploadStatus(
+        `${t("corpus.uploadFailed")}: ${formatApiError(data.detail, t("common.unknownError"))}`,
+        true,
+      );
       return;
     }
 
-    showUploadStatus(
-      `Uploaded "${data.filename}" — ${data.chunks_extracted} chunk(s) extracted, ${data.chunks_stored} stored in ChromaDB.`,
-      false
-    );
+    const outcomes = data.files || [data];
+    const summary = outcomes.map((item) => item.status === "indexed"
+      ? `✓ ${t("corpus.chunksIndexed", { file: item.filename, n: item.chunks_stored })}`
+      : `✗ ${t("corpus.fileFailed", { file: item.filename, error: item.error || t("corpus.failed") })}`
+    ).join("\n");
+    showUploadStatus(summary, Number(data.succeeded ?? 1) === 0);
 
     // Reset form
     pdfFileInput.value = "";
-    selectedFile = null;
+    selectedPdfFiles = [];
     dropZoneFile.textContent = "";
     dropZone.classList.remove("has-file");
     document.getElementById("doc-id").value = "";
@@ -536,7 +778,7 @@ uploadForm.addEventListener("submit", async (e) => {
     // Refresh corpus status if visible
     if (activeNav === "corpus") loadCorpusStatus();
   } catch (err) {
-    showUploadStatus(`Network error: ${err.message}`, true);
+    showUploadStatus(`${t("chat.networkError")}: ${err.message}`, true);
   } finally {
     uploadSubmit.disabled = false;
   }
@@ -547,44 +789,51 @@ uploadForm.addEventListener("submit", async (e) => {
 // ------------------------------------------------------------------
 
 async function loadCorpusStatus() {
-  corpusInfo.innerHTML = `<p class="hint">Loading...</p>`;
+  corpusInfo.innerHTML = `<p class="hint">${escapeHtml(t("common.loading"))}</p>`;
   try {
     const response = await fetch("/api/rag/status");
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      corpusInfo.innerHTML = `<p class="hint">Error: ${data.detail || response.statusText}</p>`;
+      corpusInfo.innerHTML = `<p class="hint">${escapeHtml(t("common.error"))}: ${escapeHtml(data.detail || response.statusText)}</p>`;
       return;
     }
 
     const count = data.document_count ?? "?";
     const collection = data.collection ?? "?";
     const dir = data.chroma_dir ?? "?";
-    const samples = data.sample_ids || [];
+    const documents = data.documents || [];
 
     let html = `
-      <div class="stat-row"><span>Collection</span><span>${escapeHtml(collection)}</span></div>
-      <div class="stat-row"><span>Documents</span><span>${count}</span></div>
-      <div class="stat-row"><span>Storage</span><span>${escapeHtml(dir)}</span></div>
+      <div class="stat-row"><span>${escapeHtml(t("corpus.collection"))}</span><span dir="auto">${escapeHtml(collection)}</span></div>
+      <div class="stat-row"><span>${escapeHtml(t("corpus.indexedChunks"))}</span><span class="num">${escapeHtml(count)}</span></div>
+      <div class="stat-row"><span>${escapeHtml(t("corpus.documents"))}</span><span class="num">${documents.length}</span></div>
+      <div class="stat-row"><span>${escapeHtml(t("corpus.storage"))}</span><span class="path">${escapeHtml(dir)}</span></div>
     `;
 
-    if (samples.length > 0) {
-      html += `<div class="stat-row" style="flex-direction:column;align-items:flex-start;gap:0.25rem;">
-        <span>Sample IDs:</span>
-        <span style="font-size:0.75rem;color:var(--fg-muted);">${samples.map(escapeHtml).join(", ")}</span>
-      </div>`;
+    if (documents.length > 0) {
+      html += `<div class="stored-file-list">${documents.map((doc) => `
+        <div class="stored-file-row">
+          <div class="stored-file-copy">
+            <strong dir="auto">${escapeHtml(doc.filename)}</strong>
+            <span class="stored-file-meta">${Number(doc.chunk_count || 0)} ${escapeHtml(t("corpus.chunks"))} · ${Number(doc.page_count || 0)} ${escapeHtml(t("corpus.pages"))}${doc.ingested_at ? ` · ${escapeHtml(doc.ingested_at)}` : ""}</span>
+          </div>
+          <span class="file-status status-indexed">${escapeHtml(t("corpus.indexed"))}</span>
+        </div>`).join("")}</div>`;
+    } else {
+      html += `<p class="hint">${escapeHtml(t("corpus.noDocuments"))}</p>`;
     }
 
     corpusInfo.innerHTML = html;
   } catch (err) {
-    corpusInfo.innerHTML = `<p class="hint">Failed to load: ${err.message}</p>`;
+    corpusInfo.innerHTML = `<p class="hint">${escapeHtml(t("corpus.loadFailed"))}: ${escapeHtml(err.message)}</p>`;
   }
 }
 
 refreshCorpusBtn.addEventListener("click", loadCorpusStatus);
 
 clearCorpusBtn.addEventListener("click", async () => {
-  if (!confirm("Are you sure you want to delete the entire ChromaDB collection? This cannot be undone.")) {
+  if (!confirm(t("corpus.confirmClear"))) {
     return;
   }
   clearCorpusBtn.disabled = true;
@@ -592,12 +841,12 @@ clearCorpusBtn.addEventListener("click", async () => {
     const response = await fetch("/api/rag/clear", { method: "DELETE" });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      alert(`Failed to clear: ${data.detail || response.statusText}`);
+      alert(`${t("corpus.clearFailed")}: ${data.detail || response.statusText}`);
       return;
     }
     loadCorpusStatus();
   } catch (err) {
-    alert(`Error: ${err.message}`);
+    alert(`${t("common.error")}: ${err.message}`);
   } finally {
     clearCorpusBtn.disabled = false;
   }
@@ -608,11 +857,12 @@ clearCorpusBtn.addEventListener("click", async () => {
 // ------------------------------------------------------------------
 
 function timestamp() {
-  return new Date().toLocaleTimeString();
+  const locale = window.i18n && window.i18n.lang === "fa" ? "fa-IR" : "en-GB";
+  return new Date().toLocaleTimeString(locale);
 }
 
 function clearLog() {
-  log.innerHTML = `<div class="log-line log-muted">Idle. Run the pipeline to see activity here.</div>`;
+  log.innerHTML = `<div class="log-line log-muted">${escapeHtml(t("pipeline.logIdle"))}</div>`;
 }
 
 function appendLog(label, status, detailLines) {
@@ -666,6 +916,9 @@ function formatCountsByType(obj, indent = "    ") {
     .map(([type, n]) => `${indent}${String(n).padStart(6)}  ${type}`);
 }
 
+// The activity log is machine/diagnostic output: it stays in English and
+// pinned LTR (see .console-output in style.css), the same way a terminal
+// would. Only the operator-facing labels around it are localised.
 function formatIngestSummary(data) {
   const lines = [];
   if (typeof data.nodes_attempted === "number") {
@@ -775,41 +1028,36 @@ async function getJSON(path) {
 
 ingestForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const fd = new FormData(ingestForm);
-
-  const ifcPath = fd.get("ifc_path");
-  if (!ifcPath) {
-    logError("Pipeline failed", "Select an IFC file first (drag & drop or click to browse).");
+  const projectId = projectIdInput.value.trim();
+  const fileIds = Array.from(selectedIfcFileIds);
+  if (!projectId || !fileIds.length) {
+    logError(t("log.pipelineFailed"), t("log.needProjectAndFiles"));
     return;
   }
 
   ingestSubmitBtn.disabled = true;
 
   try {
-    const url = new URL("/api/ingest", window.location.origin);
-    url.searchParams.set("ifc_path", ifcPath);
-
-    // Grab multiple selections from the checkbox-dropdowns if they exist, otherwise fallback to old csv behavior
-    if (ingestStoreyDropdown.root && ingestTypeDropdown.root) {
-        const storeys = ingestStoreyDropdown.getSelected();
-        const types = ingestTypeDropdown.getSelected();
-
-        addRepeatedParams("storey", storeys, url.searchParams);
-        addRepeatedParams("type", types, url.searchParams);
-    } else {
-        csvToRepeatedParams("storey", fd.get("storey"), url.searchParams);
-        csvToRepeatedParams("type", fd.get("type"), url.searchParams);
-    }
-
-    url.searchParams.set("reset", ingestForm.querySelector('input[name="reset"]').checked);
-
-    logInfo("Starting ingestion (extract IFC → load into Neo4j)...");
-    const ingestData = await postJSON(url.pathname + url.search);
-    logSuccess("Ingestion complete", formatIngestSummary(ingestData.load_summary || ingestData));
-
-    logInfo("Starting clash & clearance detection...");
-    const analyzeData = await postJSON("/api/analyze");
-    logSuccess("Clash detection complete", formatAnalyzeSummary(analyzeData));
+    const payload = {
+      file_ids: fileIds,
+      storeys: ingestStoreyDropdown.getFilterValue(),
+      types: ingestTypeDropdown.getFilterValue(),
+      reset_all: ingestForm.querySelector('input[name="reset"]').checked,
+      run_clash_detection: true,
+    };
+    logInfo(t("log.federating", { n: fileIds.length }));
+    const response = await fetch(`/api/ifc/projects/${encodeURIComponent(projectId)}/ingest`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const ingestData = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(JSON.stringify(ingestData.detail || ingestData));
+    logSuccess(t("log.ingestDone"), formatIngestSummary(ingestData.load_summary || ingestData));
+    if (ingestData.analysis) logSuccess(t("log.clashDone"), formatAnalyzeSummary(ingestData.analysis));
+    (ingestData.per_file || []).forEach((item) => {
+      const detail = item.status === "processed" ? `${item.nodes} nodes, ${item.edges} edges` : item.error;
+      appendLog(`${item.filename}: ${item.status}`, item.status === "processed" ? "success" : "error", [detail]);
+    });
+    await loadIfcProjects();
 
     // The graph just changed (new/updated storeys, types, clashes) - refresh
     // the Results tab's filter options before loading results.
@@ -817,7 +1065,7 @@ ingestForm.addEventListener("submit", async (e) => {
     await loadTypes();
     await loadResults();
   } catch (err) {
-    logError("Pipeline failed", err.message || err);
+    logError(t("log.pipelineFailed"), err.message || err);
   } finally {
     ingestSubmitBtn.disabled = false;
   }
@@ -829,6 +1077,14 @@ ingestForm.addEventListener("submit", async (e) => {
 
 let currentStoreyFilter = "";
 let currentTypesFilter = [];
+
+// Maps the results sub-tab id to its label key, so log lines name the tab in
+// the reader's language instead of echoing the internal identifier.
+const RESULT_TAB_KEYS = {
+  clashes: "results.clashes",
+  violations: "results.violations",
+  issues: "results.all",
+};
 
 resultTabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -842,7 +1098,7 @@ resultTabButtons.forEach((btn) => {
 refreshResultsBtn.addEventListener("click", loadResults);
 
 async function loadResults() {
-  resultsBody.innerHTML = `<tr><td colspan="6" class="empty">Loading...</td></tr>`;
+  resultsBody.innerHTML = `<tr><td colspan="6" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
   try {
     // Call the matching backend route depending on which tab is active
     let endpoint = "api/issues";
@@ -854,30 +1110,35 @@ async function loadResults() {
     if (currentTypesFilter && currentTypesFilter.length > 0) {
       url.searchParams.set("types", currentTypesFilter.join(","));
     }
+    if (projectIdInput && projectIdInput.value.trim()) {
+      url.searchParams.set("project_id", projectIdInput.value.trim());
+    }
 
     const rows = await getJSON(url.pathname + url.search);
     renderRows(rows);
-    logInfo(`Loaded ${rows ? rows.length : 0} row(s) into "${activeTab}" results.`);
+    logInfo(t("log.loadedRows", { n: rows ? rows.length : 0, tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }));
   } catch (err) {
-    resultsBody.innerHTML = `<tr><td colspan="6" class="empty">Error: ${err}</td></tr>`;
-    logError(`Failed to load "${activeTab}" results`, err.message || err);
+    resultsBody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(t("common.error"))}: ${escapeHtml(err.message || err)}</td></tr>`;
+    logError(t("log.loadFailed", { tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }), err.message || err);
   }
 }
 
 function renderRows(rows) {
   if (!rows || rows.length === 0) {
-    resultsBody.innerHTML = `<tr><td colspan="6" class="empty">No results.</td></tr>`;
+    // data-i18n so the languagechange handler can re-render this row without
+    // re-fetching (see the handler near the bottom of this file).
+    resultsBody.innerHTML = `<tr><td colspan="6" class="empty" data-i18n="results.noResults">${escapeHtml(t("results.noResults"))}</td></tr>`;
     return;
   }
   resultsBody.innerHTML = rows
     .map((r) => `
       <tr>
-        <td>${r.a_type ?? ""}</td>
-        <td>${r.a_name ?? ""}</td>
-        <td>${r.b_type ?? ""}</td>
-        <td>${r.b_name ?? ""}</td>
-        <td>${r.issue ?? ""}</td>
-        <td>${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
+        <td>${autoDir(`<strong>${escapeHtml(r.a_type)}</strong>`)}<br>${autoDir(escapeHtml(r.a_name))}<br><small class="guid">${escapeHtml(r.a_guid ?? r.a_id ?? "")}</small></td>
+        <td>${autoDir(escapeHtml(r.a_source_ifc_file ?? t("results.legacySource")))}</td>
+        <td>${autoDir(`<strong>${escapeHtml(r.b_type)}</strong>`)}<br>${autoDir(escapeHtml(r.b_name))}<br><small class="guid">${escapeHtml(r.b_guid ?? r.b_id ?? "")}</small></td>
+        <td>${autoDir(escapeHtml(r.b_source_ifc_file ?? t("results.legacySource")))}${r.cross_file ? `<br><span class="file-status">${escapeHtml(t("results.crossFile"))}</span>` : ""}</td>
+        <td>${escapeHtml(r.issue ?? "")}</td>
+        <td class="num">${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
       </tr>
     `)
     .join("");
@@ -886,8 +1147,10 @@ function renderRows(rows) {
 // ------------------------------------------------------------------
 // Init
 // ------------------------------------------------------------------
-loadCorpusStatus();
-loadResults();
+// Deferred to DOMContentLoaded so i18n.js has published window.i18n and
+// applied the saved language before any dynamic string is rendered.
+// (Previously these ran at parse time, which is also why a stale element
+// reference could throw before the rest of the script had been evaluated.)
 
 // Fetch storeys/types from Neo4j when the page loads or the Results tab
 // is opened (for the Results tab filters). Both are graph-backed, so they
@@ -901,7 +1164,12 @@ async function loadStoreys() {
         const resultStoreySelect = document.getElementById('storeyFilter');
         if (resultStoreySelect) {
             const previous = resultStoreySelect.value;
-            resultStoreySelect.innerHTML = '<option value="">All Storeys</option>';
+            resultStoreySelect.innerHTML = '';
+            const allOption = document.createElement('option');
+            allOption.value = '';
+            allOption.textContent = t('results.allStoreys');
+            allOption.setAttribute('data-i18n', 'results.allStoreys');
+            resultStoreySelect.appendChild(allOption);
             (data.storeys || []).forEach(storey => {
                 const opt = document.createElement('option');
                 opt.value = storey;
@@ -942,9 +1210,7 @@ async function loadTypes() {
 }
 
 // ------------------------------------------------------------------
-// Pipeline form: upload an IFC file, then populate its storey/type
-// filters. Nothing is scanned until the user picks a file — no more
-// scanning the whole dataset/ifc/ directory up front.
+// Project-scoped multi-IFC upload, selection and combined filter metadata.
 // ------------------------------------------------------------------
 
 function populateIngestFilterSelects(data) {
@@ -972,18 +1238,28 @@ function resetIngestFilterSelects(placeholder) {
     if (rescanBtn) rescanBtn.disabled = true;
 }
 
-async function uploadIfcFile(file) {
-    if (!file.name.toLowerCase().endsWith(".ifc")) {
-        logError("IFC upload failed", "Only .ifc files are accepted.");
+async function uploadIfcFiles(files) {
+    files = Array.from(files || []);
+    if (!files.length || files.some((file) => !file.name.toLowerCase().endsWith(".ifc"))) {
+        logError(t("log.ifcUploadFailed"), t("log.allMustBeIfc"));
         return;
     }
-
-    ifcDropZoneFile.textContent = `${file.name} — uploading...`;
+    const projectId = projectIdInput.value.trim();
+    if (!projectId) {
+        logError(t("log.ifcUploadFailed"), t("log.needProject"));
+        return;
+    }
+    renderSelectedFileNames(ifcDropZoneFile, files);
     ifcDropZone.classList.add("has-file");
-    resetIngestFilterSelects("Scanning file...");
+    resetIngestFilterSelects("pipeline.scanning");
 
     const formData = new FormData();
-    formData.append("file", file);
+    if (files.length === 1) {
+        formData.append("file", files[0]);
+    } else {
+        files.forEach((item) => formData.append("files", item));
+    }
+    formData.append("project_id", projectId);
 
     try {
         const response = await fetch("/api/ifc/upload", { method: "POST", body: formData });
@@ -993,49 +1269,70 @@ async function uploadIfcFile(file) {
             throw new Error(data.detail || `${response.status} ${response.statusText}`);
         }
 
-        ifcPathHidden.value = data.ifc_path;
-        ifcDropZoneFile.textContent = data.filename;
         populateIngestFilterSelects(data);
-        logSuccess("IFC file uploaded", [`${data.filename} — ${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
+        (data.files || []).forEach((item) => {
+          const ok = item.status === "uploaded";
+          appendLog(`${item.filename}: ${item.status}`, ok ? "success" : "error", [ok ? t("log.readyForIngestion") : item.error]);
+          if (ok) selectedIfcFileIds.add(item.file_id);
+        });
+        await loadIfcProjects();
     } catch (err) {
-        ifcPathHidden.value = "";
-        ifcDropZoneFile.textContent = `${file.name} — upload failed`;
+        ifcDropZoneFile.textContent = t("log.uploadFailedShort", { n: files.length });
         ifcDropZone.classList.remove("has-file");
-        resetIngestFilterSelects("Select an IFC file first");
-        logError("IFC upload failed", err.message || err);
+        resetIngestFilterSelects("pipeline.selectFilesFirst");
+        logError(t("log.ifcUploadFailed"), err.message || err);
     }
 }
 
-async function rescanCurrentIfcFile() {
-    const ifcPath = ifcPathHidden.value;
-    if (!ifcPath) return;
-
-    const rescanBtn = document.getElementById('rescan-dataset-btn');
-    if (rescanBtn) rescanBtn.disabled = true;
-
-    try {
-        const url = `/api/filters/dataset?refresh=true&ifc_path=${encodeURIComponent(ifcPath)}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        populateIngestFilterSelects(data);
-        if (data.errors && data.errors.length > 0) {
-            logError("Rescan finished with issues", data.errors);
-        } else {
-            logSuccess("Rescanned IFC file", [`${data.storeys.length} storey(s), ${data.types.length} type(s) found`]);
-        }
-    } catch (err) {
-        logError("Rescan failed", err.message || err);
-    } finally {
-        if (rescanBtn) rescanBtn.disabled = false;
-    }
+async function loadIfcProjects() {
+  try {
+    const data = await getJSON("/api/ifc/projects");
+    ifcProjects = data.projects || [];
+    const projectId = projectIdInput.value.trim();
+    const project = ifcProjects.find((item) => item.project_id === projectId);
+    const files = project ? project.files : [];
+    const availableIds = new Set(files.map((item) => item.file_id));
+    selectedIfcFileIds = new Set(Array.from(selectedIfcFileIds).filter((id) => availableIds.has(id)));
+    if (!selectedIfcFileIds.size) files.filter((item) => item.status === "ingested").forEach((item) => selectedIfcFileIds.add(item.file_id));
+    const updateCombinedFilters = () => {
+      const selected = files.filter((item) => selectedIfcFileIds.has(item.file_id));
+      const storeys = Array.from(new Set(selected.flatMap((item) => item.storeys || []))).sort();
+      const counts = {};
+      selected.flatMap((item) => item.types || []).forEach((item) => {
+        counts[item.type] = (counts[item.type] || 0) + Number(item.count || 0);
+      });
+      populateIngestFilterSelects({storeys, types: Object.entries(counts).map(([type, count]) => ({type, count}))});
+    };
+    updateCombinedFilters();
+    const registeredHtml = files.length ? files.map((item) => `
+      <label class="stored-file-row selectable-file">
+        <input type="checkbox" data-file-id="${escapeHtml(item.file_id)}" ${selectedIfcFileIds.has(item.file_id) ? "checked" : ""} />
+        <div class="stored-file-copy">
+          <strong dir="auto">${escapeHtml(item.filename)}</strong>
+          <span class="stored-file-meta">${escapeHtml(item.discipline || t("pipeline.unspecified"))} · ${Number(item.node_count || 0)} ${escapeHtml(t("pipeline.nodes"))} · ${escapeHtml(item.ingested_at || item.uploaded_at || "")}</span>
+        </div>
+        <span class="file-status status-${escapeHtml(item.status)}">${escapeHtml(item.processing_status || item.status)}</span>
+      </label>`).join("") : `<p class="hint">${escapeHtml(t("pipeline.noModels"))}</p>`;
+    const legacyHtml = (data.legacy_unregistered_files || []).length ? `
+      <p class="hint">${escapeHtml(t("pipeline.legacyFiles"))}</p>
+      ${(data.legacy_unregistered_files || []).map((item) => `
+        <div class="stored-file-row"><div class="stored-file-copy"><strong dir="auto">${escapeHtml(item.filename)}</strong></div>
+        <span class="file-status">${escapeHtml(t("pipeline.notImported"))}</span></div>`).join("")}` : "";
+    ifcModelList.innerHTML = registeredHtml + legacyHtml;
+    ifcModelList.querySelectorAll("input[data-file-id]").forEach((input) => input.addEventListener("change", () => {
+      if (input.checked) selectedIfcFileIds.add(input.dataset.fileId);
+      else selectedIfcFileIds.delete(input.dataset.fileId);
+      updateCombinedFilters();
+    }));
+  } catch (err) {
+    ifcModelList.innerHTML = `<p class="hint">${escapeHtml(t("pipeline.listFailed"))}: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 ifcDropZone.addEventListener("click", () => ifcFileInput.click());
 
 ifcFileInput.addEventListener("change", () => {
-    if (ifcFileInput.files && ifcFileInput.files[0]) {
-        uploadIfcFile(ifcFileInput.files[0]);
-    }
+    if (ifcFileInput.files && ifcFileInput.files.length) uploadIfcFiles(ifcFileInput.files);
 });
 
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
@@ -1054,21 +1351,26 @@ ifcFileInput.addEventListener("change", () => {
 });
 
 ifcDropZone.addEventListener("drop", (e) => {
-    const files = e.dataTransfer.files;
-    if (files && files[0] && files[0].name.toLowerCase().endsWith(".ifc")) {
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length && files.every((item) => item.name.toLowerCase().endsWith(".ifc"))) {
         const dt = new DataTransfer();
-        dt.items.add(files[0]);
+        files.forEach((item) => dt.items.add(item));
         ifcFileInput.files = dt.files;
-        uploadIfcFile(files[0]);
+        uploadIfcFiles(files);
     } else {
-        logError("IFC upload failed", "Only .ifc files are accepted.");
+        logError(t("log.ifcUploadFailed"), t("log.onlyIfc"));
     }
 });
 
 const rescanDatasetBtn = document.getElementById('rescan-dataset-btn');
 if (rescanDatasetBtn) {
-    rescanDatasetBtn.addEventListener('click', rescanCurrentIfcFile);
+    rescanDatasetBtn.disabled = false;
+    rescanDatasetBtn.addEventListener('click', loadIfcProjects);
 }
+projectIdInput.addEventListener("change", () => {
+  selectedIfcFileIds.clear();
+  loadIfcProjects();
+});
 
 // Handle clicking "Apply Filters" on the Results table
 const applyBtn = document.getElementById('applyFiltersBtn');
@@ -1103,7 +1405,53 @@ if (clearFiltersBtn) {
     });
 }
 
-// Run this when the script loads
-loadStoreys();  // Results tab storey filter (Neo4j-backed)
-loadTypes();    // Results tab type filter (Neo4j-backed)
+// ------------------------------------------------------------------
+// Language changes
+// ------------------------------------------------------------------
+// i18n.js rewrites every element carrying data-i18n; anything this script
+// rendered dynamically has to be re-rendered here. Re-fetching would be
+// wasteful and would discard state, so each case re-renders from what is
+// already in hand.
+document.addEventListener("languagechange", () => {
+  syncWorkspaceHeader();
+
+  // Dropdown toggle labels / option lists hold live selection state.
+  ingestStoreyDropdown.relabel();
+  ingestTypeDropdown.relabel();
+
+  // "All storeys" is the only translated <option>; the rest are storey names.
+  const storeySelect = document.getElementById("storeyFilter");
+  const allOption = storeySelect && storeySelect.querySelector('option[value=""]');
+  if (allOption) allOption.textContent = t("results.allStoreys");
+
+  // Panels whose entire body is generated. Each of these is a cheap re-render
+  // of already-fetched data except the two that must hit the API again to
+  // rebuild their markup; both are idempotent GETs.
+  if (activeNav === "corpus") loadCorpusStatus();
+  if (activeNav === "pipeline") loadIfcProjects();
+
+  // The idle log line is the only translated content in the console.
+  const idle = log.querySelector(".log-muted");
+  if (idle) idle.textContent = t("pipeline.logIdle");
+
+  // The results table: re-render only the placeholder row. Real rows contain
+  // element names from the model, which are not translated, so reloading them
+  // would cost a request for no benefit.
+  const placeholder = resultsBody.querySelector("td.empty");
+  if (placeholder && placeholder.hasAttribute("data-i18n")) {
+    placeholder.textContent = t(placeholder.getAttribute("data-i18n"));
+  }
+});
+
+// ------------------------------------------------------------------
+// Init
+// ------------------------------------------------------------------
+document.addEventListener("DOMContentLoaded", () => {
+  syncWorkspaceHeader();
+  loadCorpusStatus();
+  loadIfcProjects();
+  loadStoreys();   // Results tab storey filter (Neo4j-backed)
+  loadTypes();     // Results tab type filter (Neo4j-backed)
+  loadResults();
+});
 // Pipeline tab storey/type filters populate on IFC upload, not on page load — see uploadIfcFile().

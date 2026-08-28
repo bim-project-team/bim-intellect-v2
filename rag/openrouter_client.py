@@ -2,8 +2,8 @@
 openrouter_client.py
 ---------------------
 Shared OpenRouter configuration, client construction, and retry/error
-handling used by both the embedding pipeline (embedder.py) and the RAG
-chat pipeline (retriever.py).
+handling used by RAG query understanding, grounded generation, optional
+remote embeddings, and graph Cypher generation.
 
 OpenRouter exposes an OpenAI-compatible API, so the official `openai`
 SDK works as a drop-in client pointed at OpenRouter's base URL instead
@@ -44,8 +44,6 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # same underlying OpenAI models the system used before switching from
 # api.openai.com to OpenRouter - override via env var if needed.
 CHAT_MODEL = os.getenv("OPENROUTER_CHAT_MODEL", "openai/gpt-4o-mini")
-EMBEDDING_MODEL = os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small")
-
 # Optional attribution headers (OpenRouter leaderboards only - not required
 # for the API to function). See https://openrouter.ai/docs/app-attribution
 SITE_URL = os.getenv("OPENROUTER_SITE_URL", "")
@@ -94,6 +92,9 @@ def get_client() -> OpenAI:
         base_url=OPENROUTER_BASE_URL,
         api_key=api_key,
         default_headers=default_headers,
+        # Retry policy is centralized in call_with_retries; disabling the SDK's
+        # hidden retry layer avoids duplicated waits and makes logs deterministic.
+        max_retries=0,
     )
     return _client
 
@@ -136,6 +137,11 @@ def call_with_retries(fn: Callable[[], T], *, op_name: str,
             # Only 5xx (provider/OpenRouter overloaded) is worth retrying.
             # 4xx like bad request, model not found, or content policy
             # rejections will fail the same way every time.
+            if exc.status_code == 403:
+                raise LLMConfigError(
+                    f"{op_name} failed: OpenRouter/provider access is forbidden (403). "
+                    "Check account policy and model permissions."
+                ) from exc
             if 500 <= exc.status_code < 600 and attempt < max_retries:
                 last_exc = exc
                 _sleep_backoff(op_name, attempt, max_retries, exc)

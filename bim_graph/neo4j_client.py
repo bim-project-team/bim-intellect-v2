@@ -35,7 +35,7 @@ class Neo4jClient:
             result = session.run(query, parameters or {})
             return [record.data() for record in result]
 
-    def validate(self, query: str) -> tuple[bool, list[str]]:
+    def validate(self, query: str, parameters=None) -> tuple[bool, list[str]]:
         """Check a query's validity/planner warnings via EXPLAIN, without
         executing it against real data.
 
@@ -50,9 +50,17 @@ class Neo4jClient:
         """
         try:
             with self._driver.session() as session:
-                result = session.run(f"EXPLAIN {query}")
+                result = session.run(f"EXPLAIN {query}", parameters or {})
                 summary = result.consume()
-                warnings = [n.description for n in summary.notifications]
+                warnings = []
+                for notification in summary.notifications or []:
+                    description = (
+                        notification.get("description", "")
+                        if isinstance(notification, dict)
+                        else getattr(notification, "description", "")
+                    )
+                    if description:
+                        warnings.append(description)
                 return True, warnings
         except Exception as exc:
             return False, [str(exc)]

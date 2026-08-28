@@ -14,12 +14,14 @@ Cypher comes from one of two sources, checked in order:
 """
 
 import logging
+import json
 import re
 from typing import Any, Dict, List, Optional
 
 from bim_graph.cypher_generator import CypherGenerator
 from bim_graph.cypher_templates import try_template_match
 from bim_graph.neo4j_client import Neo4jClient
+from bim_graph.query_planner import GraphQueryPlan, missing_result_columns, plan_graph_question
 
 logger = logging.getLogger("bim_intellect.graph_retriever")
 
@@ -35,7 +37,7 @@ class GraphRetriever:
     def __init__(self):
         self.cypher_gen = CypherGenerator()
 
-    def _resolve_cypher(self, question: str) -> tuple[str, str]:
+    def _resolve_cypher(self, question: str) -> tuple[str, str, GraphQueryPlan | None]:
         """Return (cypher, source) where source is 'template' or 'llm', so
         callers/logs can tell which path produced a given query - useful
         when auditing accuracy, since template-sourced answers should
@@ -43,17 +45,28 @@ class GraphRetriever:
         template_cypher = try_template_match(question)
         if template_cypher is not None:
             logger.info("Using template-matched Cypher for question: %r", question[:120])
-            return template_cypher, "template"
+            return template_cypher, "template", None
 
-        return self.cypher_gen.generate(question), "llm"
+        plan = plan_graph_question(question)
+        if plan is not None:
+            logger.info(
+                "Graph plan: intent=%s requested_outputs=%s required_columns=%s parameters=%s",
+                plan.intent, plan.requested_outputs, plan.required_columns, plan.parameters,
+            )
+            return plan.cypher, plan.source, plan
+
+        return self.cypher_gen.generate(question), "llm", None
 
     def ask(self, question: str) -> Dict[str, Any]:
         """Generate Cypher, run it, and format results for LLM consumption."""
-        cypher, cypher_source = self._resolve_cypher(question)
+        cypher, cypher_source, plan = self._resolve_cypher(question)
+        parameters = plan.parameters if plan else {}
+        executed_queries = [cypher]
+        follow_up_required = False
 
         try:
             with Neo4jClient() as client:
-                is_valid, warnings = client.validate(cypher)
+                is_valid, warnings = client.validate(cypher, parameters)
                 if not is_valid:
                     # The query didn't even plan - almost certainly a bug
                     # in generation, not "no data". Surface this distinctly
@@ -63,14 +76,53 @@ class GraphRetriever:
                         "Generated Cypher failed validation (source=%s): %s | Query: %s",
                         cypher_source, warnings, cypher[:200],
                     )
+                    raise ValueError(f"Generated Cypher failed validation: {warnings}")
                 elif warnings:
                     logger.warning(
                         "Cypher planner warnings (source=%s) for %r: %s",
                         cypher_source, cypher[:200], warnings,
                     )
 
-                records = client.run(cypher)
+                records = client.run(cypher, parameters)
+                returned_columns = sorted(set().union(*(row.keys() for row in records))) if records else []
+                missing = missing_result_columns(records, plan.required_columns if plan else ())
+                logger.info(
+                    "Graph query result: rows=%d columns=%s completeness=%s missing=%s",
+                    len(records), returned_columns, "complete" if not missing else "incomplete", missing,
+                )
+                if missing:
+                    follow_up_required = True
+                    logger.warning(
+                        "Graph completeness repair required: missing=%s; executing one bounded follow-up",
+                        missing,
+                    )
+                    repaired = self.cypher_gen.generate_completion(question, cypher, missing)
+                    is_valid, warnings = client.validate(repaired, parameters)
+                    if not is_valid:
+                        raise ValueError(f"Corrective Cypher failed validation: {warnings}")
+                    if warnings:
+                        logger.warning("Corrective Cypher planner warnings: %s", warnings)
+                    records = client.run(repaired, parameters)
+                    executed_queries.append(repaired)
+                    cypher = repaired
+                    returned_columns = sorted(set().union(*(row.keys() for row in records))) if records else []
+                    missing = missing_result_columns(records, plan.required_columns if plan else ())
+                    logger.info(
+                        "Graph follow-up result: rows=%d columns=%s completeness=%s missing=%s",
+                        len(records), returned_columns, "complete" if not missing else "incomplete", missing,
+                    )
+                    if missing:
+                        raise RuntimeError(
+                            "Corrective graph query remained incomplete; missing: " + ", ".join(missing)
+                        )
                 context, sources = self._format_records(records, cypher, client)
+                if plan:
+                    context = (
+                        f"Graph intent: {plan.intent}\n"
+                        f"Requested outputs: {json.dumps(plan.requested_outputs, ensure_ascii=False)}\n"
+                        f"Query parameters: {json.dumps(parameters, ensure_ascii=False)}\n"
+                        f"Completeness validation: complete\n{context}"
+                    )
         except Exception as exc:
             logger.error("Cypher execution failed: %s | Query: %s", exc, cypher[:200])
             raise RuntimeError(f"Graph query execution failed: {exc}") from exc
@@ -78,6 +130,15 @@ class GraphRetriever:
         return {
             "cypher_query": cypher,
             "cypher_source": cypher_source,
+            "query_parameters": parameters,
+            "graph_intent": plan.intent if plan else "free_form",
+            "requested_outputs": list(plan.requested_outputs) if plan else [],
+            "returned_columns": returned_columns,
+            "completeness_valid": not missing,
+            "missing_outputs": missing,
+            "query_count": len(executed_queries),
+            "follow_up_query_required": follow_up_required,
+            "cypher_queries": executed_queries,
             "context": context,
             "sources": sources,
             "record_count": len(records),
@@ -129,18 +190,22 @@ class GraphRetriever:
                     label = list(value.labels)[0] if value.labels else "Element"
                     name = props.get("name", "Unnamed")
                     elem_id = props.get("id", "N/A")
+                    ifc_guid = props.get("ifcGuid", elem_id)
                     tag = props.get("tag")
                     ifc_type = props.get("ifcType", label)
-                    id_display = f"id={elem_id}" + (f", tag={tag}" if tag else "")
+                    id_display = f"id={elem_id}, ifcGuid={ifc_guid}" + (f", tag={tag}" if tag else "")
                     line_parts.append(
                         f"{key}={ifc_type}({id_display}, name={name})"
                     )
                     sources.append({
                         "type": "graph",
                         "element_id": elem_id,
+                        "ifc_guid": ifc_guid,
                         "tag": tag,
                         "name": name,
                         "ifc_type": ifc_type,
+                        "source_ifc_file": props.get("sourceIfcFile"),
+                        "project_id": props.get("projectId"),
                     })
 
                 elif hasattr(value, "type"):  # Neo4j Relationship object
@@ -166,6 +231,16 @@ class GraphRetriever:
                     line_parts.append(f"{key}={str_val}")
 
             lines.append(f"  {i}. " + " | ".join(line_parts))
+
+            # Planned relationship listings return scalar projections rather
+            # than Node objects. Preserve their endpoint IDs as UI sources.
+            for prefix in ("element_a", "element_b"):
+                elem_id = record.get(f"{prefix}_id")
+                if elem_id:
+                    sources.append({
+                        "type": "graph", "element_id": elem_id,
+                        "name": record.get(f"{prefix}_name") or "",
+                    })
 
         header = (
             f"Building Graph Results ({len(records)} total, "

@@ -1,0 +1,48 @@
+docker compose build --no-cache
+
+# Start the entire system
+docker compose up -d
+
+# Check containers
+docker compose ps
+
+# Check FastAPI logs
+docker compose logs -f app
+
+# Verify Python/Pydantic versions inside Docker
+docker compose exec app python --version
+
+docker compose exec app python -c "import fastapi,pydantic,starlette; print('FastAPI:',fastapi.__version__); print('Pydantic:',pydantic.__version__); print('Starlette:',starlette.__version__)"
+
+# Stop the project
+docker compose down
+
+# Restart the project
+docker compose restart
+
+
+# After changing Python code
+docker compose down
+docker compose build
+docker compose up -d
+
+# After changing requirements.txt
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+# Then verify:
+docker compose exec app python --version
+docker compose exec app pip list
+
+
+# Complete client installation sequence
+
+cd /d C:\path\to\bim-intellect-v2.........
+
+docker compose build
+
+docker compose up -d
+
+docker compose ps
+
+docker compose logs -f app

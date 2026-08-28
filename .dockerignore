@@ -1,0 +1,26 @@
+# Git / IDE
+.git
+.gitignore
+.idea
+.vscode
+
+# Python
+__pycache__
+*.py[cod]
+.pytest_cache
+.venv
+venv
+
+# Local runtime/cache
+*.log
+.DS_Store
+
+# Do not copy local vector DB/runtime outputs into the image
+chroma_db
+artifacts
+
+# Large/raw archives that should normally be mounted or copied intentionally
+*.zip
+
+# Secrets are supplied via docker compose env_file
+.env

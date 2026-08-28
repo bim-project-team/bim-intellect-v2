@@ -30,6 +30,7 @@ Called from the web app via:
 import csv
 import sys
 import multiprocessing
+from pathlib import Path
 import ifcopenshell
 import ifcopenshell.geom as geom
 import ifcopenshell.util.element as Element
@@ -144,7 +145,36 @@ def _safe_by_type(model, entity_type):
         return []
 
 
-def extract(model, storey_filter=None, type_filter=None):
+def _node_id(guid, project_id=None, source_file_id=None):
+    """Use a composite graph identity for federated models; retain the IFC GUID separately."""
+    if project_id and source_file_id:
+        return f"{project_id}::{source_file_id}::{guid}"
+    return guid
+
+
+def _normalize_optional_filter(values):
+    """Treat omitted and empty UI selections identically: both mean all."""
+    if not values:
+        return None
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    return normalized or None
+
+
+def extract(
+    model,
+    storey_filter=None,
+    type_filter=None,
+    *,
+    project_id=None,
+    source_ifc_file=None,
+    source_file_id=None,
+    discipline="unspecified",
+    coordinate_system_id=None,
+):
+    # The multiselect sends no values until the user chooses a subset. An
+    # empty selection means "All", not "None". Keep API/CLI behavior equal.
+    storey_filter = _normalize_optional_filter(storey_filter)
+    type_filter = _normalize_optional_filter(type_filter)
     node_rows = []
     edge_rows = []
 
@@ -156,17 +186,27 @@ def extract(model, storey_filter=None, type_filter=None):
         parent = rel.RelatingObject
         for child in rel.RelatedObjects:
             if parent.is_a("IfcSpatialStructureElement") or parent.is_a("IfcProject"):
-                edge_rows.append([parent.GlobalId, child.GlobalId, "AGGREGATES"])
+                edge_rows.append([
+                    _node_id(parent.GlobalId, project_id, source_file_id),
+                    _node_id(child.GlobalId, project_id, source_file_id),
+                    "AGGREGATES",
+                ])
 
     spatial_ids = set()
     for entity_type in SPATIAL_TYPES:
         for e in model.by_type(entity_type):
             spatial_ids.add(e.GlobalId)
             node_rows.append({
-                "id": e.GlobalId, "type": e.is_a(), "name": e.Name or "",
+                "id": _node_id(e.GlobalId, project_id, source_file_id),
+                "ifc_guid": e.GlobalId, "type": e.is_a(), "name": e.Name or "",
                 "storey_id": "", "storey_name": "",
                 "min_x": "", "min_y": "", "min_z": "",
                 "max_x": "", "max_y": "", "max_z": "",
+                "source_ifc_file": source_ifc_file or "",
+                "source_file_id": source_file_id or "",
+                "discipline": discipline or "unspecified",
+                "project_id": project_id or "",
+                "coordinate_system_id": coordinate_system_id or "",
             })
 
     # --- semantic building element nodes ---
@@ -195,7 +235,7 @@ def extract(model, storey_filter=None, type_filter=None):
             if e.GlobalId in spatial_ids:
                 continue
             storey = storey_of(e)
-            if storey_filter is not None:
+            if storey_filter:
                 storey_name = storey[1] if storey else None
                 if storey_name not in storey_filter:
                     continue
@@ -216,15 +256,25 @@ def extract(model, storey_filter=None, type_filter=None):
         bbox = bbox_map.get(e.GlobalId)
         included_ids.add(e.GlobalId)
         node_rows.append({
-            "id": e.GlobalId, "type": e.is_a(), "name": e.Name or "",
+            "id": _node_id(e.GlobalId, project_id, source_file_id),
+            "ifc_guid": e.GlobalId, "type": e.is_a(), "name": e.Name or "",
             "storey_id": storey[0] if storey else "",
             "storey_name": storey[1] if storey else "",
             "min_x": bbox[0] if bbox else "", "min_y": bbox[1] if bbox else "",
             "min_z": bbox[2] if bbox else "", "max_x": bbox[3] if bbox else "",
             "max_y": bbox[4] if bbox else "", "max_z": bbox[5] if bbox else "",
+            "source_ifc_file": source_ifc_file or "",
+            "source_file_id": source_file_id or "",
+            "discipline": discipline or "unspecified",
+            "project_id": project_id or "",
+            "coordinate_system_id": coordinate_system_id or "",
         })
         if storey:
-            edge_rows.append([storey[0], e.GlobalId, "CONTAINS"])
+            edge_rows.append([
+                _node_id(storey[0], project_id, source_file_id),
+                _node_id(e.GlobalId, project_id, source_file_id),
+                "CONTAINS",
+            ])
 
     # --- space boundary edges (space <-> element), useful for clearance rules ---
     # Only kept when both ends survived the type/storey filters above, so
@@ -234,7 +284,11 @@ def extract(model, storey_filter=None, type_filter=None):
         element = rel.RelatedBuildingElement
         if space and element:
             if space.GlobalId in included_ids and element.GlobalId in included_ids:
-                edge_rows.append([space.GlobalId, element.GlobalId, "BOUNDS"])
+                edge_rows.append([
+                    _node_id(space.GlobalId, project_id, source_file_id),
+                    _node_id(element.GlobalId, project_id, source_file_id),
+                    "BOUNDS",
+                ])
 
     # --- MEP port connections (useful if MEP is in scope for clash checks) ---
     for rel in model.by_type("IfcRelConnectsPortToElement"):
@@ -242,7 +296,11 @@ def extract(model, storey_filter=None, type_filter=None):
         element = rel.RelatedElement
         if port and element:
             if element.GlobalId in included_ids:
-                edge_rows.append([port.GlobalId, element.GlobalId, "PORT_OF"])
+                edge_rows.append([
+                    _node_id(port.GlobalId, project_id, source_file_id),
+                    _node_id(element.GlobalId, project_id, source_file_id),
+                    "PORT_OF",
+                ])
 
     return node_rows, edge_rows
 
@@ -280,8 +338,10 @@ def write_csvs(node_rows, edge_rows, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV):
 
     with open(nodes_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "id", "type", "name", "storey_id", "storey_name",
+            "id", "ifc_guid", "type", "name", "storey_id", "storey_name",
             "min_x", "min_y", "min_z", "max_x", "max_y", "max_z",
+            "source_ifc_file", "source_file_id", "discipline", "project_id",
+            "coordinate_system_id",
         ])
         writer.writeheader()
         writer.writerows(node_rows)
@@ -296,7 +356,9 @@ def write_csvs(node_rows, edge_rows, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV):
 
 
 def run_extraction(ifc_path, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV,
-                    storey_filter=None, type_filter=None):
+                    storey_filter=None, type_filter=None, *, project_id=None,
+                    source_ifc_file=None, source_file_id=None, discipline="unspecified",
+                    coordinate_system_id=None):
     """
     Public entrypoint used by api/routes.py: parse `ifc_path`, apply the
     optional storey/type filters, write nodes_csv/edges_csv, and return
@@ -306,9 +368,52 @@ def run_extraction(ifc_path, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV,
     """
     model = ifcopenshell.open(ifc_path)
     print(f"Loaded model: {ifc_path}", file=sys.stderr, flush=True)
-    node_rows, edge_rows = extract(model, storey_filter=storey_filter, type_filter=type_filter)
+    node_rows, edge_rows = extract(
+        model,
+        storey_filter=storey_filter,
+        type_filter=type_filter,
+        project_id=project_id,
+        source_ifc_file=source_ifc_file or Path(ifc_path).name,
+        source_file_id=source_file_id,
+        discipline=discipline,
+        coordinate_system_id=coordinate_system_id,
+    )
     write_csvs(node_rows, edge_rows, nodes_csv=nodes_csv, edges_csv=edges_csv)
     return node_rows, edge_rows
+
+
+def run_multi_extraction(
+    file_records,
+    nodes_csv=NODES_CSV,
+    edges_csv=EDGES_CSV,
+    storey_filter=None,
+    type_filter=None,
+):
+    """Extract aligned IFC models into one graph dataset without concatenating IFC files."""
+    all_nodes, all_edges = [], []
+    per_file = []
+    for record in file_records:
+        try:
+            model = ifcopenshell.open(record["stored_path"])
+            nodes, edges = extract(
+                model,
+                storey_filter=storey_filter,
+                type_filter=type_filter,
+                project_id=record["project_id"],
+                source_ifc_file=record["filename"],
+                source_file_id=record["file_id"],
+                discipline=record.get("discipline", "unspecified"),
+                coordinate_system_id=record["coordinate_system"]["coordinate_fingerprint"],
+            )
+            all_nodes.extend(nodes)
+            all_edges.extend(edges)
+            per_file.append({"file_id": record["file_id"], "filename": record["filename"],
+                             "status": "processed", "nodes": len(nodes), "edges": len(edges)})
+        except Exception as exc:
+            per_file.append({"file_id": record["file_id"], "filename": record["filename"],
+                             "status": "failed", "nodes": 0, "edges": 0, "error": str(exc)})
+    write_csvs(all_nodes, all_edges, nodes_csv=nodes_csv, edges_csv=edges_csv)
+    return all_nodes, all_edges, per_file
 
 
 if __name__ == "__main__":

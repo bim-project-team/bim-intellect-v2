@@ -1,309 +1,456 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- lang/dir are set by static/i18n.js on load from the saved preference.
+     The values here are the default (English) starting point. -->
+<html lang="en" dir="ltr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>BIM-Intellect MVP</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <!-- Google Fonts for typography -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BIM-Intellect</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Vazirmatn carries Persian text; JetBrains Mono the technical/data text. -->
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Vazirmatn:wght@400;500;700&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="/static/style.css?v=9" />
 </head>
 <body>
 
-  <!-- Top Navigation -->
-  <nav class="top-nav">
-    <div class="nav-brand">
-      <span class="brand-logo"></span>
-      <span class="brand-text">BIM-Intellect <span class="brand-badge">MVP</span></span>
-    </div>
-    <div class="nav-links">
-      <button class="nav-btn active" data-tab="chat">Chat</button>
-      <button class="nav-btn" data-tab="pipeline">Pipeline</button>
-      <button class="nav-btn" data-tab="results">Results</button>
-      <button class="nav-btn" data-tab="corpus">RAG Corpus</button>
-    </div>
-  </nav>
+  <div class="app-shell">
 
-  <!-- Main Container -->
-  <main class="container">
+    <!-- Shared by both drawers; clicking it closes whichever is open. -->
+    <div class="sidebar-scrim" id="sidebar-scrim"></div>
 
-    <!-- ==========================================
-         TAB: CHAT
-         ========================================== -->
-    <section id="tab-chat" class="tab-content active">
-      <div class="split-layout">
-        <!-- Left: Chat Interface -->
-        <div class="chat-wrapper card">
-          <div class="chat-header">
-            <h2>Agent Interface</h2>
-            <div class="status-indicator">
-              <span class="status-dot"></span> Ready
-            </div>
+    <!-- ======================================================================
+         SIDEBAR — overlay drawer, opened from the header toggle
+         ====================================================================== -->
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+
+      <div class="sidebar-brand">
+        <span class="brand-monogram" aria-hidden="true">BI</span>
+        <div class="brand-copy">
+          <div class="brand-name">
+            <span>BIM-Intellect</span>
+            <span class="brand-badge">MVP</span>
           </div>
-          
-          <div id="chat-messages" class="chat-messages">
-            <div class="chat-welcome">
-              <h3>Welcome to BIM-Intellect</h3>
-              <p>Ask questions about compliance or building elements. The agent will consult both the vector regulations and the Neo4j graph.</p>
-              
-              <div class="example-questions">
-                <p>Try asking:</p>
-                <button class="example-q" data-q="What is the minimum landing depth for stairs according to Mabhas 15?">What is the minimum landing depth?</button>
-                <button class="example-q" data-q="Are there any clearance violations near doors on Level 5?">Clearance violations on Level 5?</button>
-                <button class="example-q" data-q="List all clashes involving slabs.">List all clashes involving slabs.</button>
-              </div>
-            </div>
-          </div>
-
-          <form id="chat-form" class="chat-form">
-            <input 
-              type="text" 
-              id="chat-input" 
-              placeholder="Ask about regulations, clashes, or clearances..." 
-              autocomplete="off"
-            />
-            <button type="submit" id="chat-send">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            </button>
-          </form>
+          <p class="brand-tagline" data-i18n="brand.tagline">Regulatory compliance agent</p>
         </div>
-
-        <!-- Right: Meta/Sources -->
-        <div class="meta-sidebar">
-          <div class="card h-100">
-            <div class="card-header">
-              <h3>Analysis Context</h3>
-            </div>
-            <div class="card-body">
-              <div id="chat-meta" class="meta-content">
-                <p class="hint">Send a message to see which retrieval paths (Vector / Graph) the orchestrator selects.</p>
-              </div>
-            </div>
-          </div>
-        </div>
+        <button class="drawer-close" id="sidebar-close" data-i18n-title="common.close" title="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
-    </section>
 
-    <!-- ==========================================
-         TAB: PIPELINE (Ingest & Analyze)
-         ========================================== -->
-    <section id="tab-pipeline" class="tab-content">
-      <div class="split-layout">
-        
-        <!-- Left: Configuration Form -->
-        <div class="card form-card">
-          <div class="card-header">
-            <h2>Graph Pipeline</h2>
-            <p>Extract IFC geometry and run AABB clash detection.</p>
-          </div>
-          
-          <div class="card-body">
-            <form id="ingest-form">
-              <div class="form-group">
-                <label>IFC File</label>
-                <div class="drop-zone" id="ifc-drop-zone">
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; color: var(--border-color);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                  <p>Drag & drop an .ifc file here or <strong>click to browse</strong></p>
-                  <input type="file" id="ifc-file" accept=".ifc" class="hidden-input" />
-                  <p id="ifc-drop-zone-file" class="file-name"></p>
-                </div>
-                <input type="hidden" id="ifc_path" name="ifc_path" value="" required />
-                <p id="ifc-upload-hint" class="hint">Uploaded to dataset/ifc/ on the server, then scanned for its storeys and types.</p>
-              </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label" data-i18n="nav.label">Workspace</p>
+        <nav class="sidebar-nav">
 
-              <!-- Modern checkbox-dropdown multiselects -->
-              <div class="form-group">
-                <label id="ingestStoreyFilterLabel">Storey Filter (Optional)</label>
-                <div class="multiselect" id="ingestStoreyFilter" aria-labelledby="ingestStoreyFilterLabel">
-                  <button type="button" class="multiselect-toggle" disabled>
-                    <span class="multiselect-toggle-label">Select an IFC file first</span>
-                    <svg class="multiselect-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                  </button>
-                  <div class="multiselect-panel hidden">
-                    <div class="multiselect-panel-actions">
-                      <button type="button" class="multiselect-action" data-action="all">Select all</button>
-                      <button type="button" class="multiselect-action" data-action="none">Clear</button>
-                    </div>
-                    <div class="multiselect-options"></div>
-                  </div>
-                </div>
-                <p class="hint">Leave empty to include all storeys.</p>
-              </div>
+          <button class="nav-btn active" data-tab="chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            <span data-i18n="nav.chat">Chat</span>
+          </button>
 
-              <div class="form-group">
-                <label id="ingestTypeFilterLabel">IFC Type Filter (Optional)</label>
-                <div class="multiselect" id="ingestTypeFilter" aria-labelledby="ingestTypeFilterLabel">
-                  <button type="button" class="multiselect-toggle" disabled>
-                    <span class="multiselect-toggle-label">Select an IFC file first</span>
-                    <svg class="multiselect-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                  </button>
-                  <div class="multiselect-panel hidden">
-                    <div class="multiselect-panel-actions">
-                      <input type="text" class="multiselect-search" placeholder="Filter types…" />
-                      <button type="button" class="multiselect-action" data-action="all">Select all</button>
-                      <button type="button" class="multiselect-action" data-action="none">Clear</button>
-                    </div>
-                    <div class="multiselect-options"></div>
-                  </div>
-                </div>
-                <p class="hint">
-                  Leave empty to include all types.
-                  <button type="button" id="rescan-dataset-btn" class="btn-icon-text" title="Rescan the selected IFC file for storeys and types" disabled>Rescan this file</button>
+          <button class="nav-btn" data-tab="pipeline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            <span data-i18n="nav.pipeline">Pipeline</span>
+          </button>
+
+          <button class="nav-btn" data-tab="results">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18.7 8 13 13.7l-3-3L6 14.7"/></svg>
+            <span data-i18n="nav.results">Results</span>
+          </button>
+
+          <button class="nav-btn" data-tab="corpus">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span data-i18n="nav.corpus">Documents</span>
+          </button>
+
+        </nav>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <div class="sidebar-footer">
+        <div class="lang-switch" role="group" aria-label="Interface language">
+          <button type="button" class="lang-btn active" data-lang="en" lang="en">English</button>
+          <button type="button" class="lang-btn" data-lang="fa" lang="fa">فارسی</button>
+        </div>
+        <p class="sidebar-meta">Neo4j · ChromaDB</p>
+      </div>
+
+    </aside>
+
+    <!-- ======================================================================
+         WORKSPACE
+         ====================================================================== -->
+    <div class="workspace">
+
+      <header class="workspace-header">
+        <button class="sidebar-toggle" id="sidebar-toggle"
+                aria-controls="sidebar" aria-expanded="false"
+                data-i18n-title="common.menu" title="Menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+
+        <div class="workspace-heading">
+          <h1 class="workspace-title" id="workspace-title" data-i18n="nav.chat">Chat</h1>
+          <p class="workspace-subtitle" id="workspace-subtitle" data-i18n="header.chat">Hybrid retrieval over regulations and the building graph</p>
+        </div>
+
+        <div class="workspace-header-actions">
+          <!-- Chat-only control; hidden by app.js on the other tabs. -->
+          <label class="model-toggle" id="model-toggle-wrap" for="strong-models-toggle" data-i18n-title="chat.strongModelsHint" title="Use stronger models for query understanding and the grounded answer">
+            <span data-i18n="chat.strongModels">Stronger models</span>
+            <input type="checkbox" id="strong-models-toggle" />
+            <span class="model-toggle-track" aria-hidden="true"></span>
+          </label>
+
+          <span class="status-pill">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span data-i18n="status.ready">Ready</span>
+          </span>
+
+          <!-- Opens the analysis-context drawer. Chat-only, like the toggle above. -->
+          <button class="rail-toggle" id="rail-toggle"
+                  aria-controls="context-rail" aria-expanded="false"
+                  data-i18n-title="chat.contextTitle" title="Analysis context">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace-body">
+
+        <!-- ==================================================================
+             TAB: CHAT
+             ================================================================== -->
+        <section id="tab-chat" class="tab-content active">
+
+          <div class="chat-column">
+
+            <div id="chat-messages" class="chat-messages">
+              <div class="chat-welcome">
+                <div class="welcome-monogram" aria-hidden="true">BI</div>
+                <h3 data-i18n="chat.welcomeTitle">Welcome to BIM-Intellect</h3>
+                <p data-i18n="chat.welcomeBody">
+                  Ask about code compliance or about elements in the model. Each question is
+                  routed to the regulation corpus, the building graph, or both.
                 </p>
-              </div>
 
-              <div class="form-group checkbox-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" name="reset" value="true" checked />
-                  <span class="checkmark"></span>
-                  Wipe existing graph before loading
-                </label>
+                <div class="example-questions">
+                  <p data-i18n="chat.tryAsking">Try asking</p>
+                  <button class="example-q"
+                          data-q="What is the minimum landing depth for stairs according to Mabhas 15?"
+                          data-q-fa="حداقل عمق پاگرد پله بر اساس مبحث ۱۵ چقدر است؟">
+                    <span data-i18n="chat.example1">What is the minimum landing depth for stairs?</span>
+                  </button>
+                  <button class="example-q"
+                          data-q="Are there any clearance violations near doors on Level 5?"
+                          data-q-fa="آیا نقض فاصله مجاز نزدیک درها در طبقه ۵ وجود دارد؟">
+                    <span data-i18n="chat.example2">Any clearance violations near doors on Level 5?</span>
+                  </button>
+                  <button class="example-q"
+                          data-q="List all clashes involving slabs."
+                          data-q-fa="تمام برخوردهای مربوط به دال‌ها را فهرست کن.">
+                    <span data-i18n="chat.example3">List all clashes involving slabs.</span>
+                  </button>
+                </div>
               </div>
+            </div>
 
-              <div class="form-actions">
-                <button type="submit" id="ingest-submit" class="btn-primary">
-                  Run Full Pipeline
+            <div class="composer-shell">
+              <form id="chat-form" class="chat-form">
+                <label class="sr-only" for="chat-input" data-i18n="chat.inputLabel">Your question</label>
+                <!-- dir="auto": the browser derives direction from what the user
+                     actually types, so Persian input reads RTL and English LTR
+                     regardless of the interface language. -->
+                <input
+                  type="text"
+                  id="chat-input"
+                  dir="auto"
+                  autocomplete="off"
+                  data-i18n-placeholder="chat.placeholder"
+                  placeholder="Ask about regulations, clashes, or clearances…"
+                />
+                <button type="submit" id="chat-send" data-i18n-title="chat.send" title="Send">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                 </button>
+              </form>
+              <p class="composer-hint" data-i18n="chat.groundingNote">
+                Answers are limited to retrieved sources. Every regulatory claim carries a clause and page citation.
+              </p>
+            </div>
+
+          </div>
+
+          <aside class="context-rail" id="context-rail" aria-label="Analysis context">
+            <div class="rail-header">
+              <h3 data-i18n="chat.contextTitle">Analysis context</h3>
+              <button class="drawer-close" id="rail-close" data-i18n-title="common.close" title="Close">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div id="chat-meta" class="meta-content">
+              <p class="hint" data-i18n="chat.contextEmpty">
+                Send a message to see which retrieval paths the orchestrator selects.
+              </p>
+            </div>
+          </aside>
+
+        </section>
+
+        <!-- ==================================================================
+             TAB: PIPELINE
+             ================================================================== -->
+        <section id="tab-pipeline" class="tab-content">
+          <div class="tab-scroll">
+            <div class="tab-grid">
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 data-i18n="pipeline.title">Graph pipeline</h2>
+                  <p data-i18n="pipeline.subtitle">Federate IFC models, import them, then run clash detection.</p>
+                </div>
+
+                <div class="panel-body">
+                  <form id="ingest-form">
+
+                    <div class="form-group">
+                      <span class="form-label" data-i18n="pipeline.ifcModels">IFC models</span>
+                      <div class="drop-zone" id="ifc-drop-zone">
+                        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <p data-i18n="pipeline.ifcDrop">Drop .ifc files here, or click to select several</p>
+                        <input type="file" id="ifc-file" accept=".ifc" class="hidden-input" multiple />
+                        <p id="ifc-drop-zone-file" class="file-name"></p>
+                      </div>
+                      <p id="ifc-upload-hint" class="hint" data-i18n="pipeline.ifcHint">
+                        Each model is parsed independently before it becomes selectable.
+                      </p>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="form-label" for="project-id" data-i18n="pipeline.projectId">Building / project ID</label>
+                      <input type="text" id="project-id" dir="auto" value="default-project" required />
+                      <p class="hint" data-i18n="pipeline.projectIdHint">
+                        Only selected models in this project are federated for analysis.
+                      </p>
+                    </div>
+
+                    <div class="form-group">
+                      <span class="form-label" data-i18n="pipeline.storedModels">Parsed models</span>
+                      <div id="ifc-model-list" class="stored-file-list">
+                        <p class="hint" data-i18n="pipeline.loadingModels">Loading models…</p>
+                      </div>
+                    </div>
+
+                    <div class="form-group">
+                      <span class="form-label" id="ingestStoreyFilterLabel" data-i18n="pipeline.storeyFilter">Storey filter (optional)</span>
+                      <div class="multiselect" id="ingestStoreyFilter" aria-labelledby="ingestStoreyFilterLabel">
+                        <button type="button" class="multiselect-toggle" disabled>
+                          <span class="multiselect-toggle-label" data-i18n="pipeline.selectFileFirst">Select an IFC file first</span>
+                          <svg class="multiselect-caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div class="multiselect-panel hidden">
+                          <div class="multiselect-panel-actions">
+                            <button type="button" class="multiselect-action" data-action="all" data-i18n="common.selectAll">Select all</button>
+                            <button type="button" class="multiselect-action" data-action="none" data-i18n="common.clear">Clear</button>
+                          </div>
+                          <div class="multiselect-options"></div>
+                        </div>
+                      </div>
+                      <p class="hint" data-i18n="pipeline.storeyHint">Leave empty to include all storeys.</p>
+                    </div>
+
+                    <div class="form-group">
+                      <span class="form-label" id="ingestTypeFilterLabel" data-i18n="pipeline.typeFilter">IFC type filter (optional)</span>
+                      <div class="multiselect" id="ingestTypeFilter" aria-labelledby="ingestTypeFilterLabel">
+                        <button type="button" class="multiselect-toggle" disabled>
+                          <span class="multiselect-toggle-label" data-i18n="pipeline.selectFileFirst">Select an IFC file first</span>
+                          <svg class="multiselect-caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div class="multiselect-panel hidden">
+                          <div class="multiselect-panel-actions">
+                            <input type="text" class="multiselect-search" dir="auto" data-i18n-placeholder="pipeline.filterTypes" placeholder="Filter types…" />
+                            <button type="button" class="multiselect-action" data-action="all" data-i18n="common.selectAll">Select all</button>
+                            <button type="button" class="multiselect-action" data-action="none" data-i18n="common.clear">Clear</button>
+                          </div>
+                          <div class="multiselect-options"></div>
+                        </div>
+                      </div>
+                      <p class="hint">
+                        <span data-i18n="pipeline.typeHint">Leave empty to include all types.</span>
+                        <button type="button" id="rescan-dataset-btn" class="btn-inline" data-i18n="pipeline.refreshModels">Refresh model list</button>
+                      </p>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="checkbox-row">
+                        <input type="checkbox" name="reset" value="true" />
+                        <span data-i18n="pipeline.reset">Wipe the entire graph before loading (normally leave off)</span>
+                      </label>
+                    </div>
+
+                    <div class="form-actions">
+                      <button type="submit" id="ingest-submit" class="btn btn-primary btn-block" data-i18n="pipeline.run">
+                        Run full pipeline
+                      </button>
+                    </div>
+
+                  </form>
+                </div>
               </div>
-            </form>
-          </div>
-        </div>
 
-        <!-- Right: Live Log -->
-        <div class="card log-card">
-          <div class="card-header flex-between">
-            <h3>Activity Log</h3>
-            <button id="clear-log-btn" class="btn-icon" title="Clear log">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            </button>
-          </div>
-          <div id="log" class="console-output">
-            <div class="log-line log-muted">Idle. Run the pipeline to see activity here.</div>
-          </div>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- ==========================================
-         TAB: RESULTS (Issues & Violations)
-         ========================================== -->
-    <section id="tab-results" class="tab-content">
-      <div class="card">
-        <div class="card-header flex-between">
-          <h2>Detection Results</h2>
-          <div class="tab-controls">
-            <button class="tab-btn active" data-target="clashes">Hard Clashes</button>
-            <button class="tab-btn" data-target="violations">Clearance Violations</button>
-            <button class="tab-btn" data-target="issues">All Issues</button>
-            <button id="refresh-results-btn" class="btn-secondary ml-2">Refresh</button>
-          </div>
-        </div>
-        <div class="card-body results-filters" style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;padding-top:0;">
-          <div class="form-group" style="min-width:200px;">
-            <label for="storeyFilter">Storey</label>
-            <select id="storeyFilter">
-              <option value="">All Storeys</option>
-            </select>
-          </div>
-          <div class="form-group" style="min-width:220px;flex:1;">
-            <label for="typeFilter">IFC Type</label>
-            <select id="typeFilter" multiple size="1"></select>
-            <p class="hint">Ctrl/Cmd-click to select multiple. Leave empty for all types.</p>
-          </div>
-          <div class="form-group" style="display:flex;gap:0.5rem;">
-            <button type="button" id="applyFiltersBtn" class="btn-primary">Apply Filters</button>
-            <button type="button" id="clearFiltersBtn" class="btn-secondary">Clear</button>
-          </div>
-        </div>
-        <div class="table-container card-body">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Element A (Type)</th>
-                <th>Name A</th>
-                <th>Element B (Type)</th>
-                <th>Name B</th>
-                <th>Issue Type</th>
-                <th>Metric (m)</th>
-              </tr>
-            </thead>
-            <tbody id="results-body">
-              <tr>
-                <td colspan="6" class="empty">Click "Refresh" to load results.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==========================================
-         TAB: RAG CORPUS (Upload & Stats)
-         ========================================== -->
-    <section id="tab-corpus" class="tab-content">
-      <div class="split-layout">
-
-        <!-- Left: Upload Form -->
-        <div class="card form-card">
-          <div class="card-header">
-            <h2>Add Documents</h2>
-            <p>Upload PDFs to embed and store in ChromaDB.</p>
-          </div>
-
-          <div class="card-body">
-            <form id="upload-form">
-              <!-- Drag & Drop Zone -->
-              <div class="drop-zone" id="drop-zone">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; color: var(--border-color);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                <p>Drag & drop a PDF here or <strong>click to browse</strong></p>
-                <input type="file" id="pdf-file" name="file" accept=".pdf" class="hidden-input" />
-                <p id="drop-zone-file" class="file-name"></p>
+              <div class="panel log-panel">
+                <div class="panel-header row">
+                  <h3 data-i18n="pipeline.activity">Activity log</h3>
+                  <div class="panel-header-actions">
+                    <button id="clear-log-btn" class="btn-icon" data-i18n-title="pipeline.clearLog" title="Clear log">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div id="log" class="console-output">
+                  <div class="log-line log-muted" data-i18n="pipeline.logIdle">Idle. Run the pipeline to see activity here.</div>
+                </div>
               </div>
 
-              <div class="form-group" style="margin-top: 1.5rem;">
-                <label for="doc-id">Document ID (Optional)</label>
-                <input type="text" id="doc-id" name="doc_id" placeholder="e.g., mabhas-15" />
-                <p class="hint">Prefix for chunk IDs. Defaults to filename.</p>
-              </div>
-
-              <div id="upload-status" class="status-banner hidden">
-                <span class="status-icon"></span>
-                <span id="upload-status-text"></span>
-              </div>
-
-              <div class="form-actions">
-                <button type="submit" id="upload-submit" class="btn-primary w-100">
-                  Process & Embed PDF
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-
-        <!-- Right: Database Stats -->
-        <div class="card">
-          <div class="card-header flex-between">
-            <h3>ChromaDB Status</h3>
-            <div style="display:flex;gap:0.5rem;">
-              <button id="refresh-corpus-btn" class="btn-secondary btn-sm">Refresh</button>
-              <button id="clear-corpus-btn" class="btn-danger btn-sm">Clear DB</button>
             </div>
           </div>
-          <div class="card-body">
-            <div id="corpus-info" class="corpus-stats">
-              <p class="hint">Loading...</p>
+        </section>
+
+        <!-- ==================================================================
+             TAB: RESULTS
+             ================================================================== -->
+        <section id="tab-results" class="tab-content">
+          <div class="tab-scroll">
+            <div class="panel">
+
+              <div class="panel-header row">
+                <h2 data-i18n="results.title">Detection results</h2>
+                <div class="panel-header-actions">
+                  <div class="segmented">
+                    <button class="tab-btn active" data-target="clashes" data-i18n="results.clashes">Hard clashes</button>
+                    <button class="tab-btn" data-target="violations" data-i18n="results.violations">Clearance violations</button>
+                    <button class="tab-btn" data-target="issues" data-i18n="results.all">All issues</button>
+                  </div>
+                  <button id="refresh-results-btn" class="btn btn-secondary btn-sm" data-i18n="common.refresh">Refresh</button>
+                </div>
+              </div>
+
+              <div class="results-filters">
+                <div class="form-group" style="min-width: 200px;">
+                  <label class="form-label" for="storeyFilter" data-i18n="results.storey">Storey</label>
+                  <select id="storeyFilter">
+                    <option value="" data-i18n="results.allStoreys">All storeys</option>
+                  </select>
+                </div>
+                <div class="form-group" style="min-width: 220px; flex: 1;">
+                  <label class="form-label" for="typeFilter" data-i18n="results.ifcType">IFC type</label>
+                  <select id="typeFilter" multiple size="1"></select>
+                  <p class="hint" data-i18n="results.multiHint">Ctrl/Cmd-click for multiple. Empty means all types.</p>
+                </div>
+                <div class="form-group filter-actions">
+                  <button type="button" id="applyFiltersBtn" class="btn btn-primary btn-sm" data-i18n="results.apply">Apply</button>
+                  <button type="button" id="clearFiltersBtn" class="btn btn-secondary btn-sm" data-i18n="common.clear">Clear</button>
+                </div>
+              </div>
+
+              <div class="table-container">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="results.colElementA">Element A</th>
+                      <th data-i18n="results.colSourceA">Source A</th>
+                      <th data-i18n="results.colElementB">Element B</th>
+                      <th data-i18n="results.colSourceB">Source B</th>
+                      <th data-i18n="results.colIssue">Issue</th>
+                      <th data-i18n="results.colMetric">Metric (model units)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="results-body">
+                    <tr>
+                      <td colspan="6" class="empty" data-i18n="results.empty">Choose Refresh to load results.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
             </div>
           </div>
-        </div>
+        </section>
+
+        <!-- ==================================================================
+             TAB: CORPUS
+             ================================================================== -->
+        <section id="tab-corpus" class="tab-content">
+          <div class="tab-scroll">
+            <div class="tab-grid">
+
+              <div class="panel">
+                <div class="panel-header">
+                  <h2 data-i18n="corpus.title">Add documents</h2>
+                  <p data-i18n="corpus.subtitle">Upload regulation PDFs to chunk, embed, and index.</p>
+                </div>
+
+                <div class="panel-body">
+                  <form id="upload-form">
+
+                    <div class="drop-zone" id="drop-zone">
+                      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      <p data-i18n="corpus.drop">Drop PDFs here, or click to select several</p>
+                      <input type="file" id="pdf-file" name="files" accept=".pdf" class="hidden-input" multiple />
+                      <p id="drop-zone-file" class="file-name"></p>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1.25rem;">
+                      <label class="form-label" for="doc-id" data-i18n="corpus.docId">Document ID (optional)</label>
+                      <input type="text" id="doc-id" name="doc_id" dir="auto" placeholder="mabhas-15" />
+                      <p class="hint" data-i18n="corpus.docIdHint">
+                        Used only when exactly one PDF is selected. Batch IDs come from filename and content hash.
+                      </p>
+                    </div>
+
+                    <div id="upload-status" class="status-banner hidden">
+                      <span class="status-icon" aria-hidden="true"></span>
+                      <span id="upload-status-text"></span>
+                    </div>
+
+                    <div class="form-actions">
+                      <button type="submit" id="upload-submit" class="btn btn-primary btn-block" data-i18n="corpus.submit">
+                        Process and embed
+                      </button>
+                    </div>
+
+                  </form>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header row">
+                  <h3 data-i18n="corpus.statusTitle">Indexed documents</h3>
+                  <div class="panel-header-actions">
+                    <button id="refresh-corpus-btn" class="btn btn-secondary btn-sm" data-i18n="common.refresh">Refresh</button>
+                    <button id="clear-corpus-btn" class="btn btn-danger btn-sm" data-i18n="corpus.clearDb">Clear</button>
+                  </div>
+                </div>
+                <div class="panel-body">
+                  <div id="corpus-info" class="corpus-stats">
+                    <p class="hint" data-i18n="common.loading">Loading…</p>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
 
       </div>
-    </section>
+    </div>
+  </div>
 
-  </main>
-
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/i18n.js?v=2"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>
