@@ -1,480 +1,883 @@
-# BIM-Intellect — System Documentation
+# BIM-Intellect v2 — System Documentation
 
-> **RAG v2 note (August 2026):** The regulation/chat pipeline has been replaced by the versioned multilingual, conversation-aware architecture documented in [`docs/RAG_ARCHITECTURE.md`](docs/RAG_ARCHITECTURE.md). That document supersedes the older `regulations` collection, five-result retrieval, OpenRouter embedding, and stateless `/api/ask` descriptions retained later in this historical overview.
->
-> **Multi-file workflow note (August 2026):** PDF batches, project-grouped IFC batches, source provenance, coordinate-frame validation, and cross-file clash analysis are documented in [`docs/MULTI_FILE_WORKFLOWS.md`](docs/MULTI_FILE_WORKFLOWS.md). That document supersedes the historical single-file pipeline descriptions below.
+**Document version:** 2.0
 
-> **Hybrid RAG for Building Regulatory Compliance**  
-> Combines vector retrieval from building regulations (Mabhas 15) with graph retrieval from IFC building models to answer compliance questions with citations to both legal clauses and specific building elements.
+**Updated:** 2026-08-28
 
----
+**Applies to:** `fix/rag-grounded-api` after integration of `feature/ui-ux` at `0d4aff7`
 
-## Table of Contents
+## Contents
 
-1. [Goal & Problem Statement](#1-goal--problem-statement)
-2. [Architecture Overview](#2-architecture-overview)
-3. [Data Flows](#3-data-flows)
-4. [Module Reference](#4-module-reference)
-5. [Database Schemas](#5-database-schemas)
-6. [API Endpoints](#6-api-endpoints)
-7. [Configuration](#7-configuration)
-8. [Deployment](#8-deployment)
-9. [Troubleshooting](#9-troubleshooting)
+1. [Purpose and capabilities](#1-purpose-and-capabilities)
+2. [Architecture](#2-architecture)
+3. [User interface](#3-user-interface)
+4. [IFC project workflow](#4-ifc-project-workflow)
+5. [Neo4j graph model](#5-neo4j-graph-model)
+6. [Clash and clearance detection](#6-clash-and-clearance-detection)
+7. [Graph anomaly detection](#7-graph-anomaly-detection)
+8. [Regulation RAG and graph QA](#8-regulation-rag-and-graph-qa)
+9. [API reference](#9-api-reference)
+10. [Module reference](#10-module-reference)
+11. [Configuration](#11-configuration)
+12. [Installation and deployment](#12-installation-and-deployment)
+13. [Testing and verification](#13-testing-and-verification)
+14. [Operations, security, and limitations](#14-operations-security-and-limitations)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Related documents](#16-related-documents)
 
----
+## 1. Purpose and capabilities
 
-## 1. Goal & Problem Statement
+BIM-Intellect is a bilingual BIM analysis and grounded question-answering system. It joins regulation evidence from PDF documents with structured facts from IFC building models.
 
-### The Problem
-Building compliance checking is currently a **manual, error-prone process**:
-- Engineers must cross-reference IFC models (thousands of elements) against hundreds of pages of regulations.
-- Clash detection tools find geometric conflicts but cannot explain *why* they violate a code.
-- Regulation documents (e.g., Saudi Mabhas 15) are dense, clause-numbered PDFs that are hard to query.
+The current system can:
 
-### The Solution
-BIM-Intellect is a **Hybrid RAG system** that:
-1. **Ingests** building IFC models into a Neo4j graph (elements, spaces, geometries, clashes).
-2. **Ingests** regulation PDFs into a ChromaDB vector store (chunked, embedded, clause-tracked).
-3. **Answers** natural language questions by routing to the correct data source(s) and synthesizing a cited response.
+- upload and independently inspect multiple IFC files;
+- group IFC models into a project and preserve source-file/discipline provenance;
+- verify compatible units and coordinate references before federation;
+- extract selected storeys and IFC element types in world coordinates;
+- load a project-aware graph into Neo4j;
+- detect AABB clashes and clearance violations within or across selected files;
+- optionally enrich elements and clash relationships with graph-anomaly scores;
+- upload and index multiple regulation PDFs in a multilingual ChromaDB collection;
+- maintain bounded conversation context;
+- route questions to regulation retrieval, graph retrieval, both, or conversation handling;
+- generate schema-aware Cypher for common BIM question shapes;
+- require supported clause/page citations for regulatory claims;
+- present all workflows through a responsive English/Persian interface.
 
-### Example Questions the System Answers
-| Question | Sources Used | Answer Contains |
-|----------|-------------|-----------------|
-| "What is the minimum width for an elevator door per Mabhas 15?" | Vector only | [Clause 4.2] with exact requirement |
-| "How many stairs are on the ground floor?" | Graph only | Element count + IDs + names |
-| "Does this building comply with Mabhas 15 for elevator clearances?" | **Both** | Regulation requirement + building element list + gap analysis |
-| "Which elements clash with the elevator shaft?" | Graph only | Clashing element names, types, overlap volumes |
-| "List all zero-gap clearance violations on Level 5." | Graph only | Specific elements, relationship metrics |
+Typical questions include:
 
----
+| Question | Retrieval path | Expected evidence |
+|---|---|---|
+| What is the minimum landing depth for stairs? | Regulation | Retrieved clause and page |
+| How many `IfcStair` elements are loaded? | Graph | Exact property-based count |
+| List clashes between `IfcWall` and `IfcFlowSegment`. | Graph | Issue, metric, names, and IDs |
+| Does this model satisfy the retrieved stair requirement? | Regulation + graph | Cited requirement plus graph facts |
+| What did I ask previously about Level 5? | Conversation | Bounded session memory |
 
-## 2. Architecture Overview
+The application supports engineering review; it is not a certified code-checking or exact-geometry coordination product.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              FRONTEND                                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │
-│  │    Chat     │  │  Pipeline   │  │ RAG Corpus  │  │    Results      │   │
-│  │  (Hybrid)   │  │(IFC→Neo4j) │  │(PDF→Chroma) │  │(Clash/Violation)│   │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └────────┬────────┘   │
-│         │                │                │                   │           │
-│         └────────────────┴────────────────┴───────────────────┘           │
-│                                    │                                        │
-│                              /api/* endpoints                             │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │
-┌────────────────────────────────────┼────────────────────────────────────────┐
-│                              API LAYER                                       │
-│                              api/routes.py                                   │
-│  • Routes HTTP requests to the correct backend module                       │
-│  • Lazy-loads RAG modules with sys.path injection for absolute imports      │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │
-           ┌─────────────────────────┼─────────────────────────┐
-           │                         │                         │
-           ▼                         ▼                         ▼
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│      RAG LAYER       │  │     GRAPH LAYER      │  │    IFC LAYER        │
-│       rag/           │  │     bim_graph/       │  │   extract_graph.py  │
-│                      │  │                      │  │                     │
-│  chunker.py          │  │  neo4j_client.py     │  │  Parses .ifc        │
-│  embedder.py         │  │  load_to_neo4j.py    │  │  → nodes.csv        │
-│  retriever.py        │  │  clash_pipeline.py   │  │  → edges.csv        │
-│  orchestrator.py     │  │  cypher_generator.py │  │                     │
-│  prompts.py          │  │  graph_retriever.py  │  │                     │
-│  openrouter_client.py│  │  config.py           │  │                     │
-└─────────────────────┘  └─────────────────────┘  └─────────────────────┘
-           │                         │                         │
-           ▼                         ▼                         ▼
-┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│   ChromaDB (local)   │  │   Neo4j (Docker)     │  │   CSV Files         │
-│   ./chroma_db        │  │   bolt://localhost   │  │   nodes.csv         │
-│   Collection:        │  │   :7687              │  │   edges.csv         │
-│   "regulations"      │  │   APOC plugin        │  │                     │
-└─────────────────────┘  └─────────────────────┘  └─────────────────────┘
-           │                         │
-           └──────────┬──────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         LLM LAYER (OpenRouter)                              │
-│  • Routing decisions (vector vs graph vs both)                              │
-│  • Cypher query generation from natural language                              │
-│  • Final answer synthesis with citations                                      │
-│  Model: openai/gpt-4o-mini (chat), openai/text-embedding-3-small (embed)    │
-└─────────────────────────────────────────────────────────────────────────────┘
+## 2. Architecture
+
+```mermaid
+flowchart TD
+    UI[English/Persian browser UI] --> API[FastAPI application]
+
+    IFC[One or more IFC models] --> Registry[Project registry]
+    IFC --> Coord[Coordinate-system inspection]
+    Registry --> Extract[IfcOpenShell extractor]
+    Coord --> Federation[Federation validation]
+    Federation --> Extract
+    Extract --> CSV[Node/edge CSV staging]
+    CSV --> Loader[Neo4j loader]
+    Loader --> Graph[(Neo4j + APOC)]
+    Graph --> Clash[Rule-based clash detector]
+    Clash --> Graph
+    Graph --> GraphQA[Template/planner/LLM graph retrieval]
+
+    PDF[Regulation PDFs] --> Chunker[Clause-aware PDF chunker]
+    Chunker --> Embed[Local multilingual embeddings]
+    Embed --> Vector[(ChromaDB regulations_v2)]
+    Vector --> Retrieval[Multi-query retrieval and reranking]
+
+    GraphQA --> RAG[Grounded orchestrator]
+    Retrieval --> RAG
+    RAG --> OpenRouter[OpenRouter language models]
+    OpenRouter --> API
+
+    GNN[Optional graph autoencoder] --> Clash
 ```
 
----
+### Main runtime services
 
-## 3. Data Flows
+| Service | Technology | Role |
+|---|---|---|
+| Application | Python 3.12, FastAPI, Uvicorn | HTTP API and static UI |
+| IFC engine | IfcOpenShell 0.8.5 | IFC parsing and geometry |
+| Graph database | Neo4j 5.20 with APOC | BIM graph, provenance, issues, anomaly fields |
+| Vector database | ChromaDB | Persistent regulation chunks and embeddings |
+| Embeddings | Sentence Transformers | Local multilingual semantic embedding |
+| Reranking | Hybrid TF-IDF/dense or optional BGE cross-encoder | Candidate ranking |
+| Language models | OpenRouter through the OpenAI-compatible SDK | Query understanding, novel Cypher, final answer |
+| Optional ML | PyTorch sparse GCN autoencoder | Unsupervised graph anomaly scoring |
 
-### Flow A: IFC Model → Neo4j Graph
+`main.py` mounts every backend route under `/api`, serves `/static`, and returns `templates/index.html` at `/`. Static paths are resolved from the source location, so launching Uvicorn from a different working directory does not break the frontend.
 
-```
-dataset/210_King_Merged.ifc
-    │
-    ▼
-extract_graph.py  ──►  nodes.csv  +  edges.csv
-    │                         │              │
-    │    ┌────────────────────┘              │
-    │    │                                   │
-    │    ▼                                   ▼
-    │  Element nodes                      Relationships
-    │  • id (GUID)                        • AGGREGATES
-    │  • ifcType                          • CONTAINS
-    │  • name                             • BOUNDS
-    │  • storeyId / storeyName            • PORT_OF
-    │  • minX, minY, minZ                 • CLASHES_WITH (added later)
-    │  • maxX, maxY, maxZ
-    │
-    ▼
-bim_graph/load_to_neo4j.py
-    │
-    ▼  (batched UNWIND Cypher, MERGE-based, idempotent)
-    ▼
-Neo4j (:Element) nodes with dynamic labels (:IfcWall, :IfcSlab, etc.)
-    │
-    ▼
-bim_graph/clash_pipeline.py
-    │
-    ▼  (AABB overlap + clearance detection)
-    ▼
-Neo4j (:Element)-[:CLASHES_WITH {issue, metric}]->(:Element)
-```
+## 3. User interface
 
-**Key design decisions:**
-- Uses `apoc.create.addLabels` so each `IfcWall` node is also `:IfcWall` — enables `MATCH (w:IfcWall)`.
-- Uses `MERGE` so re-loading the same CSV is safe (idempotent).
-- Clash relationships carry `issue: 'CLASH' | 'CLEARANCE_VIOLATION'` and `metric: float` (overlap volume or gap distance).
+The integrated UI is implemented in `templates/index.html`, `static/style.css`, `static/i18n.js`, and `static/app.js`.
 
-### Flow B: Regulation PDF → ChromaDB
+### 3.1 Workspace structure
 
-```
-dataset/sources/mabhas-15-elvators-stairs.pdf
-    │
-    ▼
-rag/chunker.py
-    │
-    ▼  (sliding window: 800 chars, 150 overlap)
-    ▼  (regex extracts clause numbers like 4.2, 5.1.3)
-    ▼
-list[Chunk]
-  • chunk_id:  "mabhas15-p3-c12"
-  • text:      "...the minimum clear width shall be 1.2m..."
-  • page:      3
-  • clause_id: "4.2"
-    │
-    ▼
-rag/embedder.py
-    │
-    ▼  (OpenRouter text-embedding-3-small, batched 96 per request)
-    ▼
-ChromaDB PersistentCollection "regulations"
-  • ids:        [chunk_id]
-  • documents:  [chunk text]
-  • metadata:   {page_number, clause_id}
-```
+The application has four views:
 
-### Flow C: User Question → Hybrid Answer
+- **Chat:** hybrid graph/regulation questions, example questions, stronger-model mode, source tags, and retrieval diagnostics.
+- **Pipeline:** project ID, multi-IFC upload, registered-model selection, storey/type filtering, graph reset option, ingestion, analysis, and activity logging.
+- **Results:** All Issues, Clashes, and Clearances with graph-derived filters and project context.
+- **Documents:** multi-PDF upload, optional single-document ID, stored-document inventory, and collection clearing.
 
-```
-User: "Does Level 5 comply with Mabhas 15 stair requirements?"
-    │
-    ▼
-rag/orchestrator.py :: route()
-    │
-    ▼  (LLM with ROUTER_PROMPT decides data sources)
-    ▼
-┌─────────────────┐    ┌─────────────────┐
-│ needs_vector?   │    │ needs_graph?    │
-│      YES        │    │      YES        │
-└────────┬────────┘    └────────┬────────┘
-         │                      │
-         ▼                      ▼
-rag/embedder.py          bim_graph/graph_retriever.py
-query_similar()          ask()
-    │                         │
-    ▼                         ▼
-Chroma chunks            Cypher → Neo4j → records
-[Clause 4.2] text        Element names, clash metrics
-    │                         │
-    └──────────┬──────────────┘
-               ▼
-    rag/orchestrator.py :: generate()
-    │
-    ▼  (COMBINE_PROMPT → single LLM call)
-    ▼
-GPT-4o-mini synthesizes:
-  "Level 5 has 2 stairs (IfcStair id=...). 
-   Mabhas 15 [Clause 4.2] requires a minimum width of 1.2m. 
-   The main stair measures 1.5m — COMPLIANT."
-    │
-    ▼
-Frontend renders:
-  • Chat bubble with answer
-  • Source tags: [Clause 4.2] | IfcStair Main Stair
-  • Sidebar: "Sources consulted: Regulations, Building Graph"
+Navigation is an overlay drawer. Chat analysis context is a separate drawer. A shared scrim, close controls, responsive breakpoints, and `Escape` handling keep both drawers usable on desktop and mobile.
+
+### 3.2 English/Persian support
+
+`static/i18n.js` contains the English and Persian interface catalog. It:
+
+- saves the chosen language in local storage;
+- updates the document `lang` and `dir` values;
+- updates text, placeholders, labels, tooltips, and dynamic status strings;
+- mirrors layout using CSS logical properties;
+- keeps citations, metrics, IDs, and logs LTR;
+- lets questions, answers, project IDs, and IFC names choose their direction from content.
+
+This allows an English model answer in the Persian UI—or a Persian answer in the English UI—to remain readable.
+
+### 3.3 Upload compatibility
+
+Both IFC and PDF inputs allow multiple selection. The browser sends:
+
+- one file using the backward-compatible `file` multipart field;
+- multiple files using repeated `files` fields.
+
+The backend accepts both shapes. PDF upload reads repeated form parts directly to avoid version-dependent single-item/list validation behavior in FastAPI/Pydantic. Validation errors omit raw request objects and return stable JSON fields (`type`, `loc`, and `msg`), which the UI formats for users.
+
+### 3.4 Filter semantics
+
+An empty multiselect and an explicitly selected complete option set both mean “all.” Only a real subset is sent to ingestion. Results filters are populated from the graph after ingestion, so they reflect elements that were actually loaded rather than every class in the original IFC.
+
+## 4. IFC project workflow
+
+### 4.1 Upload and registration
+
+`POST /api/ifc/upload` accepts one or more `.ifc` files with a project ID and discipline. Every file is processed independently.
+
+For each file, the API:
+
+1. sanitizes the project ID and client filename;
+2. streams bytes to a temporary file under `dataset/ifc/projects/<project-id>/`;
+3. calculates SHA-256;
+4. stores the model with a digest-prefixed filename;
+5. scans IFC schema, storeys, and type counts;
+6. inspects unit scale, world coordinate systems, true north, site placement/georeference, map conversion, and project/site GUIDs;
+7. writes a record to the thread-safe JSON project registry.
+
+The content-based file ID is:
+
+```text
+<sanitized-original-stem>-<first-12-characters-of-sha256>
 ```
 
----
+Registry state distinguishes upload, extraction, graph import, analysis, failure, and files no longer present in the graph.
 
-## 4. Module Reference
+### 4.2 Federation validation
 
-### 4.1 IFC Extraction
+Cross-file ingestion is allowed only when the selected records have the same length-unit scale and a verifiable coordinate basis.
 
-| File | Responsibility |
-|------|----------------|
-| **`extract_graph.py`** | Parses `.ifc` via IfcOpenShell. Extracts every element's bounding box, IFC type, name, and storey into `nodes.csv`. Extracts spatial relationships (AGGREGATES, CONTAINS, BOUNDS, PORT_OF) into `edges.csv`. |
-| **`nodes.csv`** | One row per element: `id, type, name, storey_id, storey_name, min_x, min_y, min_z, max_x, max_y, max_z`. |
-| **`edges.csv`** | One row per relationship: `source_id, target_id, rel_type`. |
+Accepted bases are:
 
-### 4.2 Graph Layer (`bim_graph/`)
+- identical IFC map conversion metadata; or
+- identical world context plus a shared project GUID, site GUID, or site georeference.
 
-| File | Responsibility |
-|------|----------------|
-| **`config.py`** | Centralized constants: Neo4j URI, credentials, CSV paths, batch sizes, default IFC path. |
-| **`neo4j_client.py`** | Thin wrapper around `neo4j.GraphDatabase.driver`. Provides `run()`, `run_batched()`, and context-manager lifecycle. |
-| **`load_to_neo4j.py`** | Bulk-loads CSVs into Neo4j using batched `UNWIND` + `MERGE`. Uses `apoc.create.addLabels` for dynamic IFC-type labels. Creates uniqueness constraint on `Element.id`. |
-| **`clash_pipeline.py`** | AABB clash detection and clearance violation detection. Queries Neo4j for element geometries, computes overlaps/gaps, writes results back as `:CLASHES_WITH` relationships with `issue` and `metric` properties. |
-| **`diagnose_load.py`** | Debugging utility to identify dangling edge rows (source/target IDs not found in nodes). |
-| **`cypher_generator.py`** | NL → Cypher via LLM. Prompt includes full schema. Safety rails block destructive keywords (`DROP`, `DELETE`, `CREATE`, `MERGE`) and reject non-read queries. |
-| **`graph_retriever.py`** | End-to-end graph RAG: calls `cypher_generator`, executes via `neo4j_client`, formats records into LLM-readable context. Handles both Neo4j driver objects and plain dicts safely. |
+A single model is accepted without a cross-file comparison. Missing coordinate metadata, different unit scales, or unverified alignment returns HTTP 409. No automatic transform is estimated; models must be federated/aligned in the authoring workflow first.
 
-### 4.3 RAG Layer (`rag/`)
+### 4.3 IFC extraction
 
-| File | Responsibility |
-|------|----------------|
-| **`openrouter_client.py`** | Shared OpenRouter client (OpenAI SDK pointed at `https://openrouter.ai/api/v1`). Lazy client construction, retry logic with exponential backoff + jitter, error classification (`LLMConfigError` vs `LLMRequestError`). |
-| **`chunker.py`** | PDF → overlapping text chunks. Extracts page numbers, guesses clause IDs via regex `\d+\.\d+(\.\d+)?`. Output: `list[Chunk]` with `chunk_id`, `text`, `page_number`, `clause_id`. |
-| **`embedder.py`** | Embeds chunks via OpenRouter (`text-embedding-3-small`) and stores in ChromaDB persistent collection. Batches requests (default 96). Custom `EmbeddingFunction` for Chroma compatibility. |
-| **`retriever.py`** | Legacy vector-only RAG. Queries Chroma, builds citation-tagged context (`[Clause X.X] text`), calls GPT-4o-mini with strict citation prompt. Includes `ChatSession` for multi-turn conversations with fresh retrieval each turn. |
-| **`prompts.py`** | Three system prompts: `ROUTER_PROMPT` (decides vector/graph/both), `CYPHER_GENERATOR_PROMPT` (schema-aware NL→Cypher), `COMBINE_PROMPT` (synthesizes both sources into one answer). |
-| **`orchestrator.py`** | **The brain.** Three-step pipeline: (1) `route()` — LLM decides sources; (2) `retrieve()` — fetches from Chroma and/or Neo4j; (3) `generate()` — single LLM call with combined context. Falls back to both sources if routing fails. |
+`extract_graph.py` produces staging CSVs for graph loading.
 
-### 4.4 API Layer (`api/`)
+Spatial hierarchy nodes always include:
 
-| File | Responsibility |
-|------|----------------|
-| **`routes.py`** | All FastAPI endpoints. Lazy-loads RAG modules with `sys.path` injection for absolute imports. Routes: `/extract`, `/load`, `/ingest`, `/analyze`, `/clashes`, `/violations`, `/issues`, `/ask`, `/ask-vector`, `/ask-graph`, `/rag/upload`, `/rag/ingest`, `/rag/status`, `/rag/clear`. |
+- `IfcProject`;
+- `IfcSite`;
+- `IfcBuilding`;
+- `IfcBuildingStorey`.
 
-### 4.5 Frontend (`templates/` + `static/`)
+Semantic extraction uses a supported IFC-type whitelist. Type values outside that whitelist are ignored even if a UI scan discovered them. Optional storey/type filters are applied before expensive geometry extraction.
 
-| File | Responsibility |
-|------|----------------|
-| **`index.html`** | Four-tab SPA: Chat (hybrid Q&A), Pipeline (IFC ingest + console), RAG Corpus (PDF drag-drop upload + status), Results (clash/violation tables). |
-| **`style.css`** | Monochrome black & white theme. Georgia serif headings, Courier monospace data/console. Responsive chat layout with sidebar on desktop. |
-| **`app.js`** | All frontend logic: tab navigation, chat bubbles with typing indicators, example questions, drag-and-drop PDF upload, corpus status polling, pipeline console logging, results table rendering. |
+IfcOpenShell geometry settings include:
 
-### 4.6 Infrastructure
+- `USE_WORLD_COORDS = True`;
+- opening subtraction disabled for bounding-envelope performance;
+- default material application disabled;
+- a multi-process iterator restricted to filtered candidates.
 
-| File | Responsibility |
-|------|----------------|
-| **`main.py`** | FastAPI bootstrap. Mounts API router, serves static files and Jinja2 templates. |
-| **`docker-compose.yml`** | Neo4j with APOC plugin. Persists graph data to Docker volume. |
-| **`requirements.txt`** | All Python dependencies. |
-| **`env.example`** | Template for environment variables (`OPENROUTER_API_KEY`, `NEO4J_URI`, etc.). |
+Each representable element gets `min_x/min_y/min_z/max_x/max_y/max_z`. Elements without representable geometry remain graph nodes with missing bounds, but cannot enter clash detection.
 
----
+### 4.4 Extracted graph relationships
 
-## 5. Database Schemas
+| Relationship | Meaning |
+|---|---|
+| `AGGREGATES` | IFC spatial/decomposition hierarchy |
+| `CONTAINS` | Storey contains semantic element |
+| `BOUNDS` | Space boundary references an element |
+| `PORT_OF` | Distribution port belongs to an MEP element |
 
-### 5.1 Neo4j Graph Schema
+Edges are written only when the retained node set can resolve both endpoints, except that port nodes depend on extractor support. The loader reports staging edges that failed to resolve.
 
-**Nodes:**
+### 4.5 Multi-file identity and provenance
+
+Legacy single-file extraction can use the IFC GUID as `Element.id`. Project extraction uses:
+
+```text
+project_id::source_file_id::ifc_guid
+```
+
+The original GUID stays in `ifcGuid`. Elements also carry `projectId`, `sourceFileId`, `sourceIfcFile`, `discipline`, and `coordinateSystemId`.
+
+### 4.6 Graph loading
+
+`bim_graph/load_to_neo4j.py` loads CSV records through batched Bolt `UNWIND` queries. The default batch size is 1,000.
+
+The loader:
+
+- creates a uniqueness constraint on `Element.id`;
+- merges every node as `:Element`;
+- adds the runtime IFC type as an APOC dynamic label;
+- merges typed IFC relationships;
+- creates project/model provenance nodes;
+- can clear the entire graph or replace one project.
+
+The project model is:
+
+```text
+(:BIMProject)-[:HAS_MODEL]->(:IFCModel)-[:HAS_ELEMENT]->(:Element)
+```
+
+Project extraction, CSV staging, graph loading, and optional clash detection run inside a process-local reentrant lock to avoid concurrent use of shared staging files.
+
+## 5. Neo4j graph model
+
+### 5.1 Element nodes
+
 ```cypher
-(:Element {
-  id: string,           // Generated GUID (not raw IFC ID)
-  ifcType: string,      // e.g., "IfcWall", "IfcSlab"
-  name: string,         // Full IFC name, e.g., "Floor:BLDG1-FLR-Generic:339256"
-  storeyId: string,
-  storeyName: string,   // e.g., "BLDG. 1,2,3- LEVEL 5 FLR. FIN."
-  minX, minY, minZ: float,
-  maxX, maxY, maxZ: float
+(:Element:IfcWall {
+  id: "project::file::ifc-guid",
+  ifcGuid: "ifc-guid",
+  ifcType: "IfcWall",
+  name: "Wall name",
+  storeyId: "storey-guid",
+  storeyName: "Level 5",
+  minX: 0.0, minY: 0.0, minZ: 0.0,
+  maxX: 1.0, maxY: 0.3, maxZ: 3.0,
+  sourceIfcFile: "architecture.ifc",
+  sourceFileId: "architecture-abcdef123456",
+  discipline: "architecture",
+  projectId: "project-a",
+  coordinateSystemId: "coordinate-fingerprint"
 })
-// Plus dynamic label matching ifcType: :IfcWall, :IfcSlab, etc.
 ```
 
-**Relationships:**
+When anomaly inference has run, an element may also contain:
+
+```text
+anomalyScore
+anomalyFeatureError
+anomalyStructuralError
+isAnomaly
+```
+
+### 5.2 Project nodes
+
+`BIMProject` stores project identity/update time. `IFCModel` stores filename, file ID, discipline, project ID, coordinate fingerprint, and ingest time.
+
+### 5.3 Relationships
+
 ```cypher
 (:Element)-[:AGGREGATES]->(:Element)
 (:Element)-[:CONTAINS]->(:Element)
 (:Element)-[:BOUNDS]->(:Element)
 (:Element)-[:PORT_OF]->(:Element)
-(:Element)-[:CLASHES_WITH {issue: 'CLASH', metric: float}]->(:Element)
-(:Element)-[:CLASHES_WITH {issue: 'CLEARANCE_VIOLATION', metric: float}]->(:Element)
+(:Element)-[:CLASHES_WITH]->(:Element)
+(:BIMProject)-[:HAS_MODEL]->(:IFCModel)
+(:IFCModel)-[:HAS_ELEMENT]->(:Element)
 ```
 
-**Constraints:**
+`CLASHES_WITH` is a directed storage representation; its direction is not engineering causality.
+
+## 6. Clash and clearance detection
+
+`bim_graph/clash_pipeline.py` is the authoritative deterministic issue engine. It reads elements from Neo4j after graph import and writes results back to Neo4j.
+
+### 6.1 Eligible scope
+
+The fetch requires an element bounding box and optionally filters by project and selected source file IDs. Project-scoped analysis verifies that selected models are ingested and coordinate-compatible before invoking the engine.
+
+Storey is returned as metadata, but the detector does not group candidates by storey. All selected world-coordinate AABBs enter the same sweep. This permits valid cross-storey and cross-file comparisons when envelopes actually meet.
+
+### 6.2 AABB classification
+
+For each axis:
+
+```text
+gap_axis = max(a.min_axis, b.min_axis) - min(a.max_axis, b.max_axis)
+```
+
+- `gap < 0`: overlap on that axis;
+- `gap = 0`: touching envelopes;
+- `gap > 0`: separation.
+
+A pair is a `CLASH` only when all three gaps are strictly negative. Its metric is intersection-envelope volume:
+
+```text
+overlap_volume = (-gap_x) * (-gap_y) * (-gap_z)
+```
+
+All other pairs use envelope distance:
+
+```text
+distance = sqrt(max(gap_x, 0)^2 + max(gap_y, 0)^2 + max(gap_z, 0)^2)
+```
+
+The fixed implementation threshold is:
+
+```text
+CLEARANCE_THRESHOLD = 0.25
+```
+
+If `distance < 0.25`, the pair becomes `CLEARANCE_VIOLATION`. Exactly `0.25` is accepted. Touching envelopes have distance zero, so they are clearance violations rather than volumetric clashes. Metrics are rounded to four decimals.
+
+### 6.3 Sweep-and-prune candidate generation
+
+The broad phase:
+
+1. sorts elements by `min_x`;
+2. maintains an active list;
+3. drops element `a` when `a.max_x + 0.25 < b.min_x`;
+4. evaluates the complete three-axis formula for active candidates.
+
+Sorting costs `O(n log n)`. Candidate comparisons depend on spatial density and can still become `O(n²)` in the worst case. The implementation uses AABBs, not meshes, exact solids, a BVH, or a spatial database index.
+
+### 6.4 Duplicate and ignore rules
+
+The detector skips the same non-empty IFC GUID when it appears in different source files. This avoids treating duplicate discipline exports of one object as a clash.
+
+The following unordered type pairs are ignored:
+
+| Pair |
+|---|
+| `IfcWallStandardCase` + `IfcWallStandardCase` |
+| `IfcSpace` + `IfcSpace` |
+| `IfcRailing` + `IfcWallStandardCase` |
+| `IfcRailing` + `IfcStair` |
+| `IfcRailing` + `IfcSlab` |
+| `IfcRailing` + `IfcRailing` |
+| `IfcDoor` + `IfcWallStandardCase` |
+| `IfcDoor` + `IfcSlab` |
+| `IfcDoor` + `IfcDoor` |
+| `IfcCovering` + `IfcWallStandardCase` |
+| `IfcCovering` + `IfcCovering` |
+| `IfcSlab` + `IfcWallStandardCase` |
+| `IfcStair` + `IfcWallStandardCase` |
+| `IfcSlab` + `IfcStair` |
+
+These exact type-name rules suppress expected host/contact conditions. They do not automatically apply to other subclasses or domain-specific cases.
+
+### 6.5 Persistence and provenance
+
+Each detected issue is stored as:
+
 ```cypher
-CREATE CONSTRAINT element_id IF NOT EXISTS
-FOR (e:Element) REQUIRE e.id IS UNIQUE
+(a:Element)-[r:CLASHES_WITH]->(b:Element)
 ```
 
-### 5.2 ChromaDB Schema
+Relationship properties are:
 
-**Collection:** `regulations`
+| Property | Meaning |
+|---|---|
+| `issue` | `CLASH` or `CLEARANCE_VIOLATION` |
+| `metric` | Overlap volume or envelope distance |
+| `projectId` | Project analysis scope |
+| `sourceIfcFileA/B` | Source filename for each endpoint |
+| `ifcGuidA/B` | Original IFC GUIDs |
+| `crossFile` | True when both source file IDs exist and differ |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `ids` | string[] | `mabhas15-p3-c12` (doc_id + page + counter) |
-| `documents` | string[] | Chunk text (800 chars, 150 overlap) |
-| `metadatas` | dict[] | `{page_number: int, clause_id: string}` |
+For a scoped rerun, prior selected-file issue relationships in the project are deleted before writing new results. This prevents stale results even when the new analysis finds zero issues.
 
-**Embedding function:** OpenRouter `text-embedding-3-small` via custom `OpenRouterEmbeddingFunction`.
+The API summary contains element count, new issue count, graph counts by type, project, selected file IDs, and cross-file issue count.
 
----
+### 6.6 Results API semantics
 
-## 6. API Endpoints
+- `/api/clashes` returns only `CLASH`.
+- `/api/violations` returns only `CLEARANCE_VIOLATION`.
+- `/api/issues` returns both.
 
-### 6.1 IFC / Graph Pipeline
+Optional `storey`, comma-separated `types`, and `project_id` filters match when either endpoint satisfies the storey/type condition. Responses include IDs, original GUIDs, names, IFC types, disciplines, source files, issue, metric, project/cross-file fields, and optional anomaly scores.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/extract` | `POST` | Parse IFC → `nodes.csv` + `edges.csv`. Query params: `ifc_path`, `storey[]`, `type[]`. |
-| `/api/load` | `POST` | Load CSVs into Neo4j. Query param: `reset` (bool). |
-| `/api/ingest` | `POST` | `/extract` + `/load` in one call. |
-| `/api/analyze` | `POST` | Run clash & clearance detection on loaded graph. |
-| `/api/clashes` | `GET` | Return hard clashes (overlap). |
-| `/api/violations` | `GET` | Return clearance violations (too close). |
-| `/api/issues` | `GET` | Return both clashes and violations. |
+### 6.7 Important limitations
 
-### 6.2 RAG Q&A
+- An AABB overlap can be a false positive for rotated, hollow, curved, or irregular solids.
+- The source comment describes `0.25` as feet, while the implementation does not convert the threshold using IFC unit metadata. Treat it as model units until physical-unit normalization is implemented.
+- The engine does not return clash points, intersection solids, penetration direction, or viewer markup.
+- Ignore rules and clearance are global constants rather than system/discipline/tolerance profiles.
+- The synchronous analysis request can be expensive on dense models.
+- Unscoped legacy analysis does not have the same stale-result replacement guarantees as project-scoped analysis.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/ask` | `POST` | **Hybrid RAG.** Auto-routes to vector/graph/both. Body: `{question}`. |
-| `/api/ask-vector` | `POST` | Debug: regulation vector search only. |
-| `/api/ask-graph` | `POST` | Debug: graph query only. |
+## 7. Graph anomaly detection
 
-### 6.3 RAG Corpus Management
+The optional anomaly subsystem is separate from deterministic clash rules. It is an unsupervised graph autoencoder used for review prioritization.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/rag/upload` | `POST` | Upload PDF via multipart/form-data. Chunk + embed + store. Form: `file`, Query: `doc_id`. |
-| `/api/rag/ingest` | `POST` | Ingest PDF from disk path. Query: `pdf_path`, `doc_id`. |
-| `/api/rag/status` | `GET` | Chroma collection stats (count, sample IDs). |
-| `/api/rag/clear` | `DELETE` | Drop the entire Chroma collection. **Destructive.** |
+### 7.1 Input features
 
----
+The encoder uses only the IFC graph before clash relationships are included:
 
-## 7. Configuration
+- bounding-box availability, center, extent, and log volume;
+- total/in/out degree, mean neighbor degree, and isolation;
+- storey presence;
+- in/out counts for each source relationship type;
+- one-hot IFC type and storey with unknown buckets.
 
-### 7.1 Environment Variables (`.env`)
+`CLASHES_WITH` is explicitly excluded from dataset and inference edges, preventing rule-output leakage into the model.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | **Required.** API key from openrouter.ai |
-| `OPENROUTER_CHAT_MODEL` | `openai/gpt-4o-mini` | LLM for chat/routing/cypher |
-| `OPENROUTER_EMBEDDING_MODEL` | `openai/text-embedding-3-small` | Embedding model |
-| `OPENROUTER_MAX_RETRIES` | `3` | Retry count for transient failures |
-| `OPENROUTER_BASE_BACKOFF` | `1.5` | Base seconds for exponential backoff |
-| `CHROMA_PERSIST_DIR` | `./chroma_db` | Local ChromaDB storage path |
-| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt URL |
-| `NEO4J_USER` | `neo4j` | Neo4j username |
-| `NEO4J_PASSWORD` | `password` | Neo4j password |
+### 7.2 Model and training
 
-### 7.2 Key Constants
+The model has two sparse GCN encoder layers, an MLP feature decoder, and a dot-product link decoder. Default training uses:
 
-| Constant | Location | Value | Purpose |
-|----------|----------|-------|---------|
-| `BATCH_SIZE` | `bim_graph/config.py` | 500 | Neo4j UNWIND batch size |
-| `EMBED_BATCH_SIZE` | `rag/embedder.py` | 96 | OpenRouter embedding batch size |
-| `CHUNK_SIZE` | `rag/chunker.py` | 800 | Characters per text chunk |
-| `CHUNK_OVERLAP` | `rag/chunker.py` | 150 | Character overlap between chunks |
-| `n_results` | `rag/orchestrator.py` | 5 | Chroma top-k retrieval |
+- hidden dimension 64;
+- latent dimension 16;
+- dropout 0.1;
+- 100 epochs;
+- seed 42;
+- `alpha=0.7` feature reconstruction;
+- `beta=0.3` structural reconstruction;
+- one sampled negative per positive edge;
+- 99th-percentile training score as a triage threshold.
 
----
+The repository contains no reviewed anomaly labels, so the threshold is not accuracy and no precision/recall/F1 claim is supported.
 
-## 8. Deployment
+### 7.3 Clash enrichment
 
-### 8.1 Prerequisites
+When `/api/analyze` enables anomaly mode, node scores are written to elements and endpoint scores are added to each issue relationship. `combinedAnomalyScore` is the maximum by default or the mean when requested.
 
-```bash
-# Python 3.12+
-pip install -r requirements.txt
+Anomaly inference never changes `issue` or `metric`. Missing checkpoints and scoring failures produce warnings and allow deterministic clash analysis to continue.
 
-# Neo4j with APOC (via Docker)
-docker-compose up -d
+## 8. Regulation RAG and graph QA
 
-# Environment
-cp env.example .env
-# Edit .env with your OPENROUTER_API_KEY
+### 8.1 Versioned multilingual index
+
+The current Chroma collection defaults to `regulations_v2`. Embeddings default to the local `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` model on CPU. OpenRouter is used for language generation, not default embedding generation.
+
+Build or inspect the versioned corpus with:
+
+```powershell
+python -m rag.indexer --source-dir dataset/sources --rebuild
+python -m rag.indexer --status
 ```
 
-### 8.2 First-Time Setup
+Changing the embedding model/provider, collection name, or index schema requires rebuilding the collection.
 
-```bash
-# 1. Start Neo4j
-docker-compose up -d
+### 8.2 PDF chunking and metadata
 
-# 2. Ingest regulations (CLI)
-python -m rag.embedder dataset/sources/mabhas-15-elvators-stairs.pdf
+The chunker extracts page text, normalizes Persian/Arabic characters and digits, detects clause roots and hierarchical clause IDs, separates logical blocks, identifies likely table-of-contents entries, and creates linked section chunks.
 
-# 3. Extract IFC → CSV
-python extract_graph.py
+Stored metadata includes document/source identity, clause, page, section, chunk order, neighboring chunk IDs, content hash, heading, and index version. PDF upload deletes stale chunks for the effective document ID before upserting the new set.
 
-# 4. Load into Neo4j
-python -m bim_graph.load_to_neo4j --reset
+Batch uploads receive content-derived document IDs. A caller-provided `doc_id` is used only for a single uploaded file.
 
-# 5. Run clash detection
-python -m bim_graph.clash_pipeline
+### 8.3 Retrieval pipeline
 
-# 6. Start API
-python main.py
-# → http://localhost:8000
+The regulation retrieval flow is:
+
+1. understand the current question using bounded conversation context;
+2. create a standalone query and up to four retrieval variants;
+3. retrieve up to 32 dense candidates per query;
+4. rerank to 10 using hybrid scoring or an optional cross-encoder;
+5. perform one bounded lexical fallback when dense relevance is weak;
+6. expand neighboring chunks, or complete sections for completeness requests;
+7. deduplicate and assemble up to the configured context-character limit.
+
+Default hybrid weights are 0.65 dense, 0.25 lexical, and 0.10 multi-query contribution. The default context limit is 28,000 characters.
+
+### 8.4 Conversation memory
+
+The `/api/ask` request accepts `conversation_id`. Memory stores recent turns, summaries, topics, used chunk IDs, and routing state. Defaults are 10 recent messages, 4,000 summary characters, 1,000 conversations, and a six-hour TTL.
+
+Memory is bounded and in-process. It is not durable across restarts and is not shared across multiple application workers.
+
+### 8.5 Graph question planning
+
+`GraphRetriever` resolves graph questions in this order:
+
+1. deterministic templates for high-frequency identifier questions;
+2. schema-aware query plans;
+3. LLM-generated Cypher for novel shapes.
+
+The deterministic planner covers:
+
+- counts grouped by `CLASHES_WITH.issue`;
+- storey-scoped issue counts where either endpoint matches;
+- `anomalyScore`/`isAnomaly` presence counts;
+- detailed issue listings between two explicit IFC types;
+- exact counts for one or more explicit IFC type names.
+
+Plans use parameters and declare required result columns. Neo4j `EXPLAIN` validates queries before execution. If a non-empty planned result omits required columns, one corrective generation/execution is allowed. A still-incomplete result fails closed. Final graph context displays at most 25 rows.
+
+### 8.6 Routing and grounded answers
+
+The orchestrator decides whether a request needs regulation retrieval, graph retrieval, both, or neither. Explicit IFC types, Neo4j schema terms, issue constants, and anomaly property names force graph routing unless regulation evidence is also explicitly requested.
+
+Regulatory statements must cite an actually retrieved clause/page pair. Citation parsing normalizes Persian digits. Unsupported, malformed, or invented citations trigger repair or a fail-closed insufficient-evidence response. Graph sources contain element identity/provenance when available.
+
+The standard model profile defaults to `openai/gpt-4o-mini` for understanding and final generation. The optional stronger profile defaults to `google/gemini-2.5-flash` for routing/understanding and `anthropic/claude-sonnet-4.5` for the final grounded answer.
+
+## 9. API reference
+
+All entries below are relative to `/api`.
+
+### 9.1 IFC and project pipeline
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/extract` | Legacy server-path IFC extraction; repeatable storey/type query filters |
+| POST | `/load` | Load staging CSVs; optional full reset |
+| POST | `/ingest` | Legacy extract + load operation |
+| POST | `/ifc/upload` | Upload/inspect one or multiple IFC files |
+| GET | `/ifc/projects` | List project registry and legacy unregistered disk models |
+| POST | `/ifc/projects/{project_id}/ingest` | Validate federation, extract, load, and optionally analyse selected file IDs |
+| POST | `/analyze` | Run project/file-scoped clash detection and optional anomaly scoring |
+
+`ProjectIngestRequest` contains:
+
+```json
+{
+  "file_ids": ["architecture-abcdef123456"],
+  "storeys": null,
+  "types": null,
+  "reset_all": false,
+  "run_clash_detection": true
+}
 ```
 
-### 8.3 Using the Web UI
+### 9.2 Filters and results
 
-1. Open `http://localhost:8000`
-2. **RAG Corpus** tab → drag & drop `mabhas-15-elvators-stairs.pdf` → Upload
-3. **Pipeline** tab → click "Run Ingestion & Clash Detection"
-4. **Chat** tab → ask: *"How many clearance violations exist on Level 5?"*
+| Method | Path | Description |
+|---|---|---|
+| GET | `/filters/dataset` | Generate/read IFC storey/type scan metadata |
+| GET | `/filters/storeys` | Storeys actually loaded in Neo4j |
+| GET | `/filters/types` | IFC types actually loaded in Neo4j |
+| GET | `/clashes` | Hard AABB overlaps |
+| GET | `/violations` | Clearance violations |
+| GET | `/issues` | Both issue types |
 
----
+Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 
-## 9. Troubleshooting
+### 9.3 Regulation corpus
 
-### 9.1 "RAG chunker/embedder modules not available" (501)
+| Method | Path | Description |
+|---|---|---|
+| POST | `/rag/upload` | Multipart one/multi-PDF indexing (`file` or repeated `files`) |
+| POST | `/rag/ingest` | Legacy trusted server-path PDF ingestion |
+| GET | `/rag/status` | Collection metadata, chunk count, samples, and indexed documents |
+| DELETE | `/rag/clear` | Delete the complete configured collection |
 
-**Cause:** `rag/` uses absolute imports (`from chunker import ...`) that fail when imported from `api/routes.py`.  
-**Fix:** `routes.py` dynamically adds `rag/` to `sys.path` before lazy imports. If this still fails, ensure `rag/__init__.py` exists.
+### 9.4 Question answering
 
-### 9.2 Cypher queries return empty results
+| Method | Path | Description |
+|---|---|---|
+| POST | `/ask` | Conversation-aware grounded vector/graph orchestration |
+| POST | `/ask-vector` | Legacy vector-only path |
+| POST | `/ask-graph` | Graph retrieval/debug path |
+| DELETE | `/rag/conversations/{conversation_id}` | Remove one in-memory conversation |
 
-**Cause:** The LLM generates queries with exact storey name matches (`= 'Level 5'`) instead of `CONTAINS`.  
-**Fix:** The `CYPHER_GENERATOR_PROMPT` explicitly instructs `CONTAINS` for storey names and `ENDS WITH` for numeric IDs embedded in element names.
+`QuestionRequest` is:
 
-### 9.3 `KeyError: 'issue'` in graph retrieval
+```json
+{
+  "question": "How many clashes are on Level 5?",
+  "conversation_id": "optional-id",
+  "use_strong_models": false,
+  "selected_element_id": null
+}
+```
 
-**Cause:** `record.data()` converts Neo4j `Relationship` objects differently across driver versions.  
-**Fix:** `graph_retriever.py` uses safe type detection (`_is_neo4j_relationship`) and dict fallback to handle both driver objects and plain dicts.
+`selected_element_id` is part of the request contract but the current `/ask` handler does not forward it to orchestration.
 
-### 9.4 No clashes detected after `/analyze`
+### 9.5 Health
 
-**Cause:** Elements may have been filtered out during `/ingest` (storey/type filter too restrictive).  
-**Fix:** Run `/ingest` with no filters, or check `diagnose_load.py` for dangling edges.
+`GET /api/health` checks Neo4j and Chroma. It returns HTTP 200 only when both checks pass; otherwise it returns HTTP 503 with per-service status. `/api/health/` is an alias.
 
-### 9.5 Chroma collection empty after upload
+## 10. Module reference
 
-**Cause:** `embed_and_store()` may have failed silently, or the collection path is wrong.  
-**Fix:** Check `/api/rag/status` for document count. Check server logs for `LLMRequestError` during embedding.
+### Application and API
 
----
+| File | Responsibility |
+|---|---|
+| `main.py` | Application creation, CORS, validation handler, router/static/UI mounts |
+| `api/routes.py` | HTTP contracts and pipeline orchestration |
 
-## 10. Design Principles
+### IFC and graph
 
-| Principle | Implementation |
-|-----------|----------------|
-| **Single source of truth** | `openrouter_client.py` is the only module that knows how to talk to OpenRouter. |
-| **Idempotent ingestion** | Neo4j loads use `MERGE`; Chroma `add` with deterministic IDs is safe to re-run. |
-| **Fail fast, fail loud** | `LLMConfigError` and `LLMRequestError` propagate up instead of returning empty results silently. |
-| **Lazy loading** | RAG modules are imported on first endpoint hit, not at server startup — API starts even if modules are missing. |
-| **Schema-aware generation** | Cypher prompt includes exact Neo4j schema (dynamic labels, relationship properties) to reduce hallucination. |
-| **Safety first** | Cypher generator blocks all destructive keywords and rejects non-read query starters. |
+| File | Responsibility |
+|---|---|
+| `extract_graph.py` | Filtered world-coordinate IFC graph extraction |
+| `extract_sotreys_type.py` | Storey/type discovery for UI filters |
+| `bim_graph/project_registry.py` | Project/file manifest and provenance states |
+| `bim_graph/coordinate_system.py` | IFC coordinate inspection and federation checks |
+| `bim_graph/load_to_neo4j.py` | Batched Neo4j loading and project graph replacement |
+| `bim_graph/neo4j_client.py` | Neo4j driver wrapper, batching, `EXPLAIN`, counts |
+| `bim_graph/clash_pipeline.py` | Deterministic issue detection and optional anomaly integration |
+| `bim_graph/query_planner.py` | Complete parameterized plans for high-risk graph shapes |
+| `bim_graph/cypher_templates.py` | Narrow deterministic question templates |
+| `bim_graph/cypher_generator.py` | Read-only free-form and corrective Cypher generation |
+| `bim_graph/graph_retriever.py` | Query selection, validation, execution, completeness, formatting |
 
----
+### RAG
 
-*Document version: 1.0*  
-*Generated: 2026-08-05*
+| File | Responsibility |
+|---|---|
+| `rag/config.py` | Environment-backed model, index, retrieval, and memory settings |
+| `rag/chunker.py` | Multilingual clause/page-aware PDF chunking |
+| `rag/embedder.py` | Local embeddings and Chroma collection operations |
+| `rag/indexer.py` | Versioned corpus rebuild/status CLI |
+| `rag/retrieval.py` | Multi-query retrieval, fallback, expansion, context assembly |
+| `rag/reranker.py` | Hybrid or cross-encoder ranking |
+| `rag/memory.py` | Bounded in-process conversation state |
+| `rag/orchestrator.py` | Understanding, routing, retrieval, generation, citation validation |
+| `rag/prompts.py` | Understanding, routing, Cypher, repair, and combine prompts |
+| `rag/openrouter_client.py` | Lazy OpenRouter client and bounded retry handling |
+| `rag/retriever.py` | Legacy vector-only API compatibility |
+
+### Anomaly model
+
+| File | Responsibility |
+|---|---|
+| `bim_graph/anomaly/dataset.py` | IFC/CSV graph dataset build and caching |
+| `bim_graph/anomaly/features.py` | Geometry/topology/categorical encoding |
+| `bim_graph/anomaly/model.py` | Sparse GCN autoencoder and losses |
+| `bim_graph/anomaly/train.py` | Reproducible training/checkpoint CLI |
+| `bim_graph/anomaly/inference.py` | Scoring, CSV output, clash enrichment |
+
+### Frontend and deployment
+
+| File | Responsibility |
+|---|---|
+| `templates/index.html` | Accessible workspace structure |
+| `static/style.css` | Responsive monochrome LTR/RTL presentation |
+| `static/i18n.js` | English/Persian interface localization |
+| `static/app.js` | Browser state, API calls, uploads, filters, rendering, drawers |
+| `Dockerfile` | Python 3.12 application image |
+| `docker-compose.yml` | Neo4j-only development service |
+| `docker-compose.client.yml` | Full Neo4j + application deployment |
+| `.dockerignore` | Excludes secrets, caches, local data, and artifacts from build context |
+
+## 11. Configuration
+
+Copy `.env.example` to `.env` and provide the required OpenRouter key. `.env` is ignored by Git and excluded from Docker build context.
+
+### 11.1 Neo4j and storage
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NEO4J_URI` | `bolt://localhost:7687` | Bolt endpoint |
+| `NEO4J_USER` | `neo4j` | Database user |
+| `NEO4J_PASSWORD` | `bimintellect` | Development password |
+| `IFC_PATH` | `dataset/210_King_Merged.ifc` | Legacy default IFC path |
+| `NODES_CSV` | `nodes.csv` | Staging node CSV |
+| `EDGES_CSV` | `edges.csv` | Staging edge CSV |
+| `BIM_PROJECT_STORAGE_DIR` | `dataset/ifc/projects` | Registered model storage |
+| `BIM_PROJECT_REGISTRY` | `dataset/ifc/project_registry.json` | Registry manifest |
+
+### 11.2 Models and index
+
+| Variable | Default |
+|---|---|
+| `OPENROUTER_API_KEY` | required for LLM operations |
+| `RAG_ROUTER_MODEL` | `openai/gpt-4o-mini` |
+| `RAG_FINAL_MODEL` | `openai/gpt-4o-mini` |
+| `RAG_STRONG_ROUTER_MODEL` | `google/gemini-2.5-flash` |
+| `RAG_STRONG_FINAL_MODEL` | `anthropic/claude-sonnet-4.5` |
+| `RAG_EMBEDDING_PROVIDER` | `local` |
+| `RAG_EMBEDDING_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
+| `RAG_EMBEDDING_DEVICE` | `cpu` |
+| `RAG_EMBEDDING_BATCH_SIZE` | `64` |
+| `RAG_COLLECTION_NAME` | `regulations_v2` |
+| `RAG_INDEX_VERSION` | `2` |
+| `CHROMA_PERSIST_DIR` | `./chroma_db` |
+
+### 11.3 Retrieval and memory defaults
+
+| Variable | Default |
+|---|---|
+| `RAG_CANDIDATE_COUNT` | `32` |
+| `RAG_RERANK_COUNT` | `10` |
+| `RAG_MAX_QUERY_VARIANTS` | `4` |
+| `RAG_MAX_SECTION_CHUNKS` | `12` |
+| `RAG_NEIGHBOR_WINDOW` | `2` |
+| `RAG_MAX_CONTEXT_CHARS` | `28000` |
+| `RAG_WEAK_RELEVANCE_THRESHOLD` | `0.18` |
+| `RAG_RERANKER_PROVIDER` | `hybrid` |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` |
+| `RAG_DENSE_WEIGHT` | `0.65` |
+| `RAG_LEXICAL_WEIGHT` | `0.25` |
+| `RAG_MULTI_QUERY_WEIGHT` | `0.10` |
+| `RAG_MEMORY_RECENT_MESSAGES` | `10` |
+| `RAG_MEMORY_SUMMARY_CHARS` | `4000` |
+| `RAG_MEMORY_MAX_CONVERSATIONS` | `1000` |
+| `RAG_MEMORY_TTL_SECONDS` | `21600` |
+
+## 12. Installation and deployment
+
+### 12.1 Local development
+
+```powershell
+git clone https://github.com/bim-project-team/bim-intellect-v2.git
+Set-Location bim-intellect-v2
+
+Copy-Item .env.example .env
+# Add OPENROUTER_API_KEY and confirm database settings.
+
+docker compose -f docker-compose.yml up -d
+python -m pip install -r requirements.txt
+python -m rag.indexer --source-dir dataset/sources --rebuild
+python -m uvicorn main:app --reload
+```
+
+Open `http://localhost:8000`. Neo4j Browser is available at `http://localhost:7474` in the development composition.
+
+### 12.2 Full Docker deployment
+
+```powershell
+docker compose -f docker-compose.client.yml build
+docker compose -f docker-compose.client.yml up -d
+docker compose -f docker-compose.client.yml ps
+docker compose -f docker-compose.client.yml logs -f app
+```
+
+The full composition:
+
+- builds the application from `python:3.12.6-slim`;
+- installs IFC/scientific system libraries and Python dependencies;
+- starts Neo4j 5.20 with APOC;
+- waits for Neo4j health before starting the application;
+- exposes app/Neo4j ports 8000, 7474, and 7687;
+- persists Neo4j in a named volume;
+- mounts host `chroma_db`, `dataset`, and `artifacts` directories.
+
+Inside Compose the application uses `bolt://neo4j:7687`, not localhost.
+
+### 12.3 Typical UI workflow
+
+1. Open **Documents**, upload regulation PDFs, and confirm indexed documents.
+2. Open **Pipeline**, enter a stable project/building ID, and upload IFC models.
+3. Select parsed models and optional storey/type subsets.
+4. Run ingestion and clash analysis.
+5. Open **Results** to filter and review detected issues.
+6. Open **Chat** to ask regulation, graph, or combined questions.
+
+## 13. Testing and verification
+
+The integrated tree was verified on 2026-08-28 with:
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+python -m pytest -q
+node --check static/app.js
+node --check static/i18n.js
+python -m compileall -q api bim_graph rag main.py extract_graph.py extract_sotreys_type.py
+docker compose -f docker-compose.client.yml config
+```
+
+Result: **84 tests passed, 3 skipped**. The skips are environment/optional-integration dependent. A global incompatible Hydra/OmegaConf pytest plugin on the verification workstation required disabling third-party plugin auto-loading; it was not a project test failure.
+
+Test coverage includes:
+
+- clause parsing, indexing, retrieval, routing, conversation, and citation validation;
+- graph query planning, exact types, grouped issue counts, completeness repair, and safety;
+- AABB rules, anomaly feature/model behavior, and clash enrichment;
+- project registry, coordinate federation, multi-file extraction/provenance;
+- scalar and repeated multipart upload compatibility;
+- frontend input contracts and API OpenAPI schemas.
+
+Frontend serving returned HTTP 200 and generated OpenAPI successfully. Docker Compose configuration validated. At verification time local Chroma was reachable while Neo4j was not running, so `/api/health` correctly returned HTTP 503.
+
+## 14. Operations, security, and limitations
+
+### 14.1 Current security posture
+
+The current repository is suitable for trusted development/private evaluation, not direct public exposure.
+
+- No endpoint authentication or authorization is implemented.
+- CORS allows all origins and credentials.
+- API callers can trigger graph reset, collection deletion, file writes, and paid LLM requests.
+- Compose uses a known development Neo4j password and unrestricted APOC procedures.
+- Legacy server-path IFC/PDF endpoints assume a trusted caller.
+- Upload limits, quotas, malware scanning, rate limits, and audit logs are absent.
+
+Production deployment should add identity, role checks, explicit origins, secret rotation, restricted APOC/read-only graph users for generated queries, upload/rate controls, and tenant/project authorization.
+
+### 14.2 Scalability and state
+
+- IFC extraction, graph import, clash detection, and PDF embedding run synchronously in HTTP handlers.
+- A process-local lock serializes project ingestion but does not coordinate multiple workers/hosts.
+- Conversation memory, project registry, CSV staging, Chroma, and artifacts are local state.
+- Neo4j clients create a driver per operation rather than sharing one application-level pool.
+- Dense AABB candidate sets remain worst-case quadratic.
+- Result endpoints cap rows and graph LLM context shows no more than 25 rows.
+
+Long-running work should move to durable background jobs with progress, cancellation, retry, and shared persistence before scaling horizontally.
+
+### 14.3 Correct interpretation
+
+- `CLASH` means strictly overlapping AABBs, not confirmed solid intersection.
+- `CLEARANCE_VIOLATION` means AABB separation below the fixed threshold.
+- An anomaly is an unsupervised reconstruction score, not a clash or code violation.
+- A regulatory answer is grounded only in retrieved corpus material; missing evidence should produce an insufficient-evidence answer.
+- A 200 response with an empty issue/filter list can currently hide a Neo4j exception in handlers that catch infrastructure errors, so health/status must also be checked.
+
+## 15. Troubleshooting
+
+### UI loads without styles or scripts
+
+Run the server from the repository and request `/static/style.css`, `/static/i18n.js`, and `/static/app.js`. `main.py` resolves these paths relative to itself. Browser cache-busting query values are already included in the HTML.
+
+### Multipart upload returns 400 or 422
+
+Send one or more actual file parts using `file` or `files`. Do not send a text field with those names. Do not manually set a multipart boundary in browser code; `FormData` must set it.
+
+### Multi-file IFC ingestion returns 409
+
+Inspect the `alignment` object. Re-upload files missing coordinate metadata. Unit mismatch or unverified world alignment must be corrected in the authoring/federation tool; the API intentionally does not guess a transform.
+
+### No elements are checked for clashes
+
+Confirm the selected models have `status=ingested` and that extracted nodes contain all six bounding fields. Review storey/type filters and extraction logs. Elements without IfcOpenShell-representable geometry are not clash candidates.
+
+### Unexpected clash volume or clearance
+
+Remember that metrics come from AABBs and the threshold is a fixed 0.25 model units. Check IFC units, world coordinates, ignored type pairs, and duplicate GUID behavior. Use exact geometry software to confirm critical findings.
+
+### Graph questions fail or return no rows
+
+Check `/api/health`, Neo4j connectivity, project ingestion, and graph filter values. Planned graph diagnostics expose intent, parameters, returned columns, completeness, and query count. Novel wording can still use LLM-generated Cypher.
+
+### Regulation retrieval is empty or outdated
+
+Run:
+
+```powershell
+python -m rag.indexer --status
+python -m rag.indexer --source-dir dataset/sources --rebuild
+```
+
+Confirm `RAG_COLLECTION_NAME`, index version, embedding model, and Chroma directory. Changing embedding/index settings without rebuilding produces an incompatible corpus.
+
+### Strong-model chat fails while standard mode works
+
+Confirm the configured OpenRouter account can access both strong-profile model IDs. The stronger option changes two models and can have different availability/cost.
+
+### Pytest fails before collection in a shared Python environment
+
+Third-party auto-loaded plugins can conflict with the environment. Isolate dependencies in a virtual environment or run:
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
+python -m pytest -q
+```
+
+## 16. Related documents
+
+- [`REPORT.md`](REPORT.md) — integrated audit/report and recommended next work
+- [`docs/RAG_ARCHITECTURE.md`](docs/RAG_ARCHITECTURE.md) — detailed RAG v2 design
+- [`docs/MULTI_FILE_WORKFLOWS.md`](docs/MULTI_FILE_WORKFLOWS.md) — batch ingestion and federation contracts
+- [`docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md`](docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md) — clash/anomaly training and inference
+- [`docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md`](docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md) — graph planning and completeness
+- [`README.md`](README.md) — concise setup entry point
+
+This file is the current system documentation. The referenced subsystem documents provide deeper implementation rationale and specialized commands.
