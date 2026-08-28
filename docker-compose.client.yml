@@ -1,0 +1,48 @@
+services:
+  neo4j:
+    image: neo4j:5.20
+    container_name: bim-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/bimintellect
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bim-intellect
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # IMPORTANT: inside Docker, use the Compose service name, not localhost.
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: bimintellect
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      # Keep generated/index data persistent on the host.
+      - ./chroma_db:/app/chroma_db
+      - ./dataset:/app/dataset
+      - ./artifacts:/app/artifacts
+
+volumes:
+  neo4j_data:

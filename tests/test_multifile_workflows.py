@@ -11,6 +11,7 @@ from bim_graph.coordinate_system import validate_federation
 from rag import embedder
 from main import app
 from api import routes
+from fastapi.testclient import TestClient
 
 
 def test_empty_ifc_filters_mean_all():
@@ -159,16 +160,72 @@ def test_frontend_inputs_are_multi_file_and_send_batch_fields():
     assert 'id="ifc-file" accept=".ifc" class="hidden-input" multiple' in html
     assert 'id="pdf-file" name="files" accept=".pdf" class="hidden-input" multiple' in html
     assert 'formData.append("files", item)' in js
+    assert 'formData.append("file", files[0])' in js
     assert "selectedIfcFileIds" in js
+
+
+def test_rag_upload_accepts_single_and_multiple_files_under_plural_field(monkeypatch):
+    monkeypatch.setattr(routes, "_ensure_rag", lambda: None)
+    monkeypatch.setattr(
+        routes,
+        "_RAG_CHUNKER",
+        lambda _path, doc_id, source: [{"id": f"{doc_id}-1", "source": source}],
+    )
+    monkeypatch.setattr(routes, "_RAG_EMBEDDER", {
+        "delete_document": lambda _doc_id: 0,
+        "embed_and_store": lambda chunks: len(chunks),
+        "CHROMA_DIR": "test-chroma",
+        "COLLECTION_NAME": "test-collection",
+    })
+
+    response = TestClient(app).post(
+        "/api/rag/upload",
+        files=[("files", ("regulation.pdf", b"minimal pdf test", "application/pdf"))],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == 1
+    assert response.json()["files"][0]["filename"] == "regulation.pdf"
+
+    batch_response = TestClient(app).post(
+        "/api/rag/upload",
+        files=[
+            ("files", ("first.pdf", b"first pdf", "application/pdf")),
+            ("files", ("second.pdf", b"second pdf", "application/pdf")),
+        ],
+    )
+
+    assert batch_response.status_code == 200
+    assert batch_response.json()["succeeded"] == 2
+    assert [item["filename"] for item in batch_response.json()["files"]] == [
+        "first.pdf", "second.pdf",
+    ]
+
+
+def test_upload_validation_error_is_json_serializable():
+    response = TestClient(app).post(
+        "/api/rag/upload",
+        data={"files": "this is not an uploaded file"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["detail"] == (
+        "The 'files' and 'file' fields must contain uploaded files."
+    )
 
 
 def test_openapi_exposes_batch_and_legacy_upload_fields():
     schema = app.openapi()
     components = schema["components"]["schemas"]
     for path in ("/api/ifc/upload", "/api/rag/upload"):
-        ref = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
-        body = components[ref.rsplit("/", 1)[-1]]
-        assert body["properties"]["files"]["anyOf"][0]["type"] == "array"
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        if "$ref" in body:
+            body = components[body["$ref"].rsplit("/", 1)[-1]]
+        files_schema = body["properties"]["files"]
+        if "anyOf" in files_schema:
+            files_schema = files_schema["anyOf"][0]
+        assert files_schema["type"] == "array"
         assert "file" in body["properties"]  # backward-compatible single-file part
 
 

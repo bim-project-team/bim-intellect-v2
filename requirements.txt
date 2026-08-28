@@ -5,6 +5,7 @@ neo4j==5.20.0
 pandas>=2.0
 tqdm>=4.65
 pydantic==2.7.1
+python-multipart==0.0.20
 python-dotenv==1.0.1
 
 # rag/ module dependencies (retriever.py, chunker.py, embedder.py, etc.)

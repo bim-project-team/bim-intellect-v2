@@ -25,11 +25,12 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from bim_graph.neo4j_client import Neo4jClient
 
@@ -45,6 +46,26 @@ from bim_graph.project_registry import (
 
 router = APIRouter()
 _PIPELINE_LOCK = threading.RLock()
+
+
+def _normalize_upload_files(value):
+    """Accept both one multipart file and repeated fields as an upload list.
+
+    Some FastAPI/Pydantic combinations pass a single ``UploadFile`` through
+    unchanged for an optional list field.  Normalizing before Pydantic's list
+    validation keeps the wire format compatible across those versions.
+    """
+    if value is None or isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
+OptionalUploadFiles = Annotated[
+    Optional[List[UploadFile]],
+    BeforeValidator(_normalize_upload_files),
+]
 
 # CSVs produced by extract_sotreys_type.py, at project root (sibling of api/)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -269,7 +290,7 @@ def analyze(
 
 @router.post("/ifc/upload")
 def upload_ifc(
-    files: Optional[List[UploadFile]] = File(None, description="One or more IFC files"),
+    files: OptionalUploadFiles = File(None, description="One or more IFC files"),
     file: Optional[UploadFile] = File(None, description="Legacy single-file field"),
     project_id: str = Form("default-project"),
     discipline: str = Form("unspecified"),
@@ -574,14 +595,46 @@ def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = Non
 # RAG corpus management: upload / ingest / status / clear
 # ------------------------------------------------------------------
 
-@router.post("/rag/upload")
-def upload_pdf(
-    files: Optional[List[UploadFile]] = File(None, description="One or more PDF files"),
-    file: Optional[UploadFile] = File(None, description="Legacy single-file field"),
+@router.post(
+    "/rag/upload",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "One or more PDF files",
+                            },
+                            "file": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": "Legacy single-file field",
+                            },
+                        },
+                    }
+                }
+            }
+        }
+    },
+)
+async def upload_pdf(
+    request: Request,
     doc_id: Optional[str] = Query(None, description="Document ID prefix for chunk IDs (defaults to filename stem)"),
 ):
+    # Read repeated multipart values directly.  Older FastAPI/Pydantic
+    # combinations can incorrectly validate one UploadFile as a list or reject
+    # repeated fields before the endpoint is called.
+    form = await request.form()
+    uploads = list(form.getlist("files")) + list(form.getlist("file"))
+    invalid_parts = [item for item in uploads if not isinstance(item, StarletteUploadFile)]
+    if invalid_parts:
+        raise HTTPException(422, "The 'files' and 'file' fields must contain uploaded files.")
+
     _ensure_rag()
-    uploads = list(files or []) + ([file] if file is not None else [])
     if not uploads:
         raise HTTPException(400, "Select at least one PDF file.")
     results = []
@@ -623,7 +676,7 @@ def upload_pdf(
         "files": results, "chroma_dir": _RAG_EMBEDDER["CHROMA_DIR"],
         "collection": _RAG_EMBEDDER["COLLECTION_NAME"],
     }
-    if file is not None and not files and succeeded:
+    if len(form.getlist("file")) == 1 and not form.getlist("files") and succeeded:
         return {**succeeded[0], **response, "status": "ok"}
     return response
 

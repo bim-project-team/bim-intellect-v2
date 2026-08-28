@@ -1,8 +1,9 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from api.routes import router as api_router
 
@@ -24,6 +25,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    _request: Request, exc: RequestValidationError
+):
+    """Return serializable validation details even when input is UploadFile."""
+    details = []
+    for error in exc.errors():
+        # UploadFile and a few other request objects cannot be JSON encoded by
+        # older FastAPI versions.  Keep only the stable, JSON-safe fields; the
+        # raw input is unnecessary and can also contain sensitive request data.
+        details.append({key: error[key] for key in ("type", "loc", "msg") if key in error})
+    return JSONResponse(status_code=422, content={"detail": details})
 
 # Mount our API routes strictly under the /api prefix
 app.include_router(api_router, prefix="/api")
