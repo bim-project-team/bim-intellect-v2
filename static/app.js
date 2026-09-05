@@ -234,6 +234,14 @@ const chatMeta = document.getElementById("chat-meta");
 const strongModelsToggle = document.getElementById("strong-models-toggle");
 const conversationStorageKey = "bim-intellect-conversation-id";
 let conversationId = sessionStorage.getItem(conversationStorageKey);
+
+const viewerPanel = document.getElementById("viewer-panel");
+const viewerToggle = document.getElementById("viewer-toggle");
+const viewerClose = document.getElementById("viewer-close");
+const viewerReset = document.getElementById("viewer-reset");
+const viewerCanvas = document.getElementById("viewer-canvas");
+const viewerPlaceholder = document.getElementById("viewer-placeholder");
+const viewerFooter = document.getElementById("viewer-footer");
 if (!conversationId) {
   conversationId = window.crypto && window.crypto.randomUUID
     ? window.crypto.randomUUID()
@@ -292,14 +300,19 @@ function syncWorkspaceHeader() {
   workspaceSubtitle.setAttribute("data-i18n", meta.subtitle);
   workspaceSubtitle.textContent = t(meta.subtitle);
 
-  // The context rail and the model toggle belong to the chat view only.
+  // The context rail, the 3D map, and the model toggle belong to chat only.
   const onChat = activeNav === "chat";
   modelToggleWrap.classList.toggle("hidden", !onChat);
   railToggle.classList.toggle("hidden", !onChat);
   contextRail.classList.toggle("hidden", !onChat);
-  // Leaving chat must also close the rail, otherwise it would reappear
+  viewerToggle.classList.toggle("hidden", !onChat);
+  viewerPanel.classList.toggle("hidden", !onChat);
+  // Leaving chat must also close the drawers, otherwise one would reappear
   // still-open when the user comes back.
-  if (!onChat) closeDrawer(contextRail, railToggle);
+  if (!onChat) {
+    closeDrawer(contextRail, railToggle);
+    closeDrawer(viewerPanel, viewerToggle);
+  }
 }
 
 // --- Drawer plumbing ------------------------------------------------
@@ -343,7 +356,7 @@ function toggleDrawer(panel, trigger) {
   else openDrawer(panel, trigger);
 }
 
-DRAWERS.push([sidebar, sidebarToggle], [contextRail, railToggle]);
+DRAWERS.push([sidebar, sidebarToggle], [contextRail, railToggle], [viewerPanel, viewerToggle]);
 
 sidebarToggle.addEventListener("click", () => toggleDrawer(sidebar, sidebarToggle));
 railToggle.addEventListener("click", () => toggleDrawer(contextRail, railToggle));
@@ -394,6 +407,176 @@ navButtons.forEach((btn) => {
 });
 
 // ------------------------------------------------------------------
+// 3D map
+// ------------------------------------------------------------------
+// One viewer instance, re-targeted per answer. viewer.js is a module and
+// therefore deferred, so it may publish window.bimViewer after this classic
+// script has run: every entry point below tolerates its absence rather than
+// assuming it is loaded.
+
+// The project whose scenes are shown. Read from the Pipeline tab's field so the
+// chat and the viewer always agree on which building is being discussed.
+function activeProjectId() {
+  return (projectIdInput && projectIdInput.value.trim()) || "";
+}
+
+// A storey scene averages ~2MB and the worst in the reference model is 13MB, so
+// an answer spanning many storeys must not fetch them all. Four keeps the
+// download bounded while still showing an element and its neighbours in context.
+const MAX_VIEWER_SCENES = 4;
+
+function setViewerFooter(lines) {
+  viewerFooter.innerHTML = (lines || [])
+    .filter(Boolean)
+    .map((line) => `<span class="viewer-scope" dir="auto">${escapeHtml(line)}</span>`)
+    .join("");
+}
+
+/** Bounding boxes for camera framing and for the no-geometry box fallback. */
+async function fetchElementBounds(projectId, sceneKeys, ifcTypes) {
+  const url = new URL("/api/model/elements", window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  (sceneKeys || []).forEach((key) => url.searchParams.append("scene_key", key));
+  (ifcTypes || []).forEach((type) => url.searchParams.append("ifc_type", type));
+  const response = await fetch(url);
+  if (!response.ok) return { elements: [], truncated: false };
+  return response.json();
+}
+
+/** Scene descriptors from the ingest-time manifest, restricted to the given keys. */
+async function fetchScenes(projectId, sceneKeys) {
+  const wanted = new Set((sceneKeys || []).filter(Boolean));
+  if (!wanted.size) return [];
+  const url = new URL("/api/model/manifest", window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const manifest = await response.json();
+  const scenes = [];
+  Object.values(manifest.files || {}).forEach((file) => {
+    (file.scenes || []).forEach((scene) => {
+      if (!wanted.has(scene.scene_key)) return;
+      scenes.push({
+        url: `/api/model/scene/${encodeURIComponent(manifest.project_id)}`
+          + `/${encodeURIComponent(file.file_id)}/${encodeURIComponent(scene.scene_key)}.glb`,
+        storeyName: scene.storey_name || "",
+        bytes: scene.bytes || 0,
+      });
+    });
+  });
+  // Smallest first, so the cap keeps the most scenes for the least bytes.
+  return scenes.sort((a, b) => a.bytes - b.bytes).slice(0, MAX_VIEWER_SCENES);
+}
+
+/**
+ * Point the viewer at one answer's evidence.
+ *
+ * `visualization` is the payload the backend attaches to every answer. `related`
+ * marks the opt-in IFC-type view, which is orientation rather than evidence, so
+ * the footer says which of the two the user is looking at.
+ */
+async function showInViewer(visualization, { related = false } = {}) {
+  if (!window.bimViewer) return;
+  window.bimViewer.attach(viewerCanvas);
+  openDrawer(viewerPanel, viewerToggle);
+
+  const projectId = visualization.project_id || activeProjectId();
+  if (!projectId) {
+    setViewerFooter([t("viewer.unavailable")]);
+    return;
+  }
+
+  viewerPlaceholder.classList.remove("hidden");
+  viewerPlaceholder.textContent = t("viewer.loading");
+  setViewerFooter([]);
+
+  const highlight = related ? [] : visualization.highlight || [];
+  const relatedTypes = related ? visualization.related_types || [] : [];
+  const requestedScenes = related ? [] : (visualization.scenes || []).slice(0, MAX_VIEWER_SCENES);
+
+  try {
+    // Bounds first: in the opt-in view the elements themselves determine which
+    // storeys are worth loading, so the scene list cannot be known before this.
+    const bounds = await fetchElementBounds(projectId, requestedScenes, relatedTypes);
+    const allBounds = bounds.elements || [];
+    const sceneKeys = related
+      ? [...new Set(allBounds.map((item) => item.scene_key).filter(Boolean))]
+      : requestedScenes;
+    const scenes = await fetchScenes(projectId, sceneKeys);
+
+    // In the evidence view only the cited elements get boxes. In the fallback
+    // (no meshes at all) every returned element is drawn, otherwise a single
+    // highlighted box would float with nothing around it.
+    const highlightKeys = new Set(
+      highlight.map((item) => item.ifc_guid || item.element_id).filter(Boolean),
+    );
+    const highlightedBounds = related
+      ? allBounds
+      : allBounds.filter((item) => highlightKeys.has(item.ifc_guid) || highlightKeys.has(item.element_id));
+
+    const result = await window.bimViewer.show({
+      sceneUrls: scenes.map((scene) => scene.url),
+      highlight: related ? allBounds : highlight,
+      bounds: highlightedBounds.length ? highlightedBounds : allBounds,
+    });
+    // A newer answer took over the viewer while this was loading; its own call
+    // owns the footer and placeholder now.
+    if (result.superseded) return;
+
+    const drawn = result.loaded ? result.matched : highlightedBounds.length;
+    viewerPlaceholder.classList.toggle("hidden", result.loaded > 0 || allBounds.length > 0);
+    viewerPlaceholder.textContent = t("viewer.empty");
+
+    const lines = [];
+    if (related) {
+      lines.push(t("viewer.relatedNotice", { types: relatedTypes.join(", ") }));
+    }
+    lines.push(t("viewer.elements", { n: drawn }));
+    const storeys = scenes.map((scene) => scene.storeyName).filter(Boolean);
+    if (storeys.length) lines.push(t("viewer.scenes", { names: storeys.join(" · ") }));
+    if (!result.loaded) lines.push(t("viewer.boxFallback"));
+    else if (highlight.length && !result.matched) lines.push(t("viewer.noMatch"));
+    if (sceneKeys.length > scenes.length) {
+      lines.push(t("viewer.sceneLimit", { shown: scenes.length, total: sceneKeys.length }));
+    }
+    if (visualization.truncated || bounds.truncated) {
+      lines.push(t("viewer.truncated", { n: drawn }));
+    }
+    setViewerFooter(lines);
+  } catch (error) {
+    viewerPlaceholder.classList.remove("hidden");
+    viewerPlaceholder.textContent = t("viewer.empty");
+    setViewerFooter([`${t("common.error")}: ${error.message || error}`]);
+  }
+}
+
+/** Per-message affordance, so any earlier answer can be re-shown. */
+function appendViewerButton(container, visualization) {
+  if (!window.bimViewer) return;
+  const related = !visualization.available && visualization.reason === "related_types";
+  if (!visualization.available && !related) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `chat-view-3d${related ? " speculative" : ""}`;
+  // Kept on the element so a later language change can relabel it without
+  // re-asking the backend (see the languagechange handler).
+  button.dataset.viewerRelated = String(related);
+  button.dataset.viewerTypes = (visualization.related_types || []).join(", ");
+  button.textContent = viewerButtonLabel(related, button.dataset.viewerTypes);
+  button.addEventListener("click", () => showInViewer(visualization, { related }));
+  container.appendChild(button);
+}
+
+function viewerButtonLabel(related, types) {
+  return related ? t("viewer.openRelated", { types }) : t("viewer.open");
+}
+
+viewerToggle.addEventListener("click", () => toggleDrawer(viewerPanel, viewerToggle));
+viewerClose.addEventListener("click", () => closeDrawer(viewerPanel, viewerToggle));
+viewerReset.addEventListener("click", () => window.bimViewer?.resetView());
+
+// ------------------------------------------------------------------
 // Chat
 // ------------------------------------------------------------------
 
@@ -426,7 +609,7 @@ function applyTextDirection(element, text) {
   element.classList.toggle("ltr", !isRtl);
 }
 
-function appendChatMessage(role, text, sources) {
+function appendChatMessage(role, text, sources, visualization) {
   // Remove welcome screen on first real message
   const welcome = chatMessages.querySelector(".chat-welcome");
   if (welcome) welcome.remove();
@@ -471,6 +654,8 @@ function appendChatMessage(role, text, sources) {
     });
     msgDiv.appendChild(tagsDiv);
   }
+
+  if (visualization) appendViewerButton(msgDiv, visualization);
 
   chatMessages.appendChild(msgDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -521,6 +706,7 @@ async function sendChat(question) {
       selected_element_id: selectedElementId,
       conversation_id: conversationId,
       use_strong_models: Boolean(strongModelsToggle && strongModelsToggle.checked),
+      project_id: activeProjectId() || null,
     };
 
     console.log("Sending /api/ask:", payload);
@@ -547,10 +733,21 @@ async function sendChat(question) {
       conversationId = data.conversation_id;
       sessionStorage.setItem(conversationStorageKey, conversationId);
     }
-    appendChatMessage("assistant", data.answer || t("chat.noAnswer"), data.sources);
+    const visualization = data.visualization || null;
+    appendChatMessage("assistant", data.answer || t("chat.noAnswer"), data.sources, visualization);
 
     // Update sidebar
     updateChatMeta(data);
+
+    // The toggle stays disabled until an answer has something to show, so it
+    // never opens onto an empty canvas.
+    const showable = Boolean(visualization && (visualization.available || visualization.related_types?.length));
+    viewerToggle.disabled = !showable;
+    // Auto-open only for actual element evidence. The opt-in type view is an
+    // offer, so it waits for the button.
+    if (visualization && visualization.available) {
+      showInViewer(visualization);
+    }
   } catch (err) {
     hideTypingIndicator();
     appendChatMessage("assistant", `${t("chat.networkError")}: ${err.message}`);
@@ -1440,6 +1637,20 @@ document.addEventListener("languagechange", () => {
   const placeholder = resultsBody.querySelector("td.empty");
   if (placeholder && placeholder.hasAttribute("data-i18n")) {
     placeholder.textContent = t(placeholder.getAttribute("data-i18n"));
+  }
+
+  // Viewer buttons on past messages: relabel from the state stored on each
+  // element rather than replaying the conversation.
+  document.querySelectorAll(".chat-view-3d").forEach((button) => {
+    button.textContent = viewerButtonLabel(
+      button.dataset.viewerRelated === "true", button.dataset.viewerTypes || "",
+    );
+  });
+  // The viewer's own footer/placeholder text. Left as-is when a scene is
+  // loaded: re-deriving it would need the answer's payload, and the footer is
+  // refreshed on the next show() anyway.
+  if (!viewerPlaceholder.classList.contains("hidden")) {
+    viewerPlaceholder.textContent = t("viewer.empty");
   }
 });
 

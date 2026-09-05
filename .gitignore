@@ -19,6 +19,10 @@ tests/*
 !tests/test_multifile_workflows.py
 !tests/test_graph_query_planner.py
 !tests/test_graph_retrieval_regression.py
+!tests/test_scene_export.py
+!tests/test_visualization_scope.py
+!tests/test_model_scene_api.py
+!tests/test_answer_visualization.py
 
 # Environment variables
 .env
@@ -32,6 +36,9 @@ ifc_types.csv
 # IFC models and large datasets
 *.ifc
 dataset/ifc/project_registry.json
+
+# Generated 3D viewer geometry (rebuilt by the ingest pipeline; ~88MB per model)
+dataset/ifc/scenes/
 
 # PDF and ZIP files
 *.pdf

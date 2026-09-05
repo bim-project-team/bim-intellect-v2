@@ -94,6 +94,30 @@ def test_completeness_validator_detects_partial_aggregate_shape():
     assert missing_result_columns([], ("element_a_id",)) == []
 
 
+def test_visualization_queries_never_alter_the_answer_contract():
+    """A plan's identity query is additive: it must not change what is answered.
+
+    The 3D viewer needs element identities that aggregate answers do not provide,
+    but the answer query's projection is what completeness validation is pinned
+    to, so the two must stay independent.
+    """
+    for question in (ISSUE_COUNTS, FLOOR_COUNTS, ANOMALY_COUNTS, EXACT_TYPES, DETAILED_LIST):
+        plan = plan_graph_question(question)
+        assert plan.visualization_cypher, f"expected an identity query for {plan.intent}"
+        assert plan.visualization_cypher != plan.cypher
+        # Required columns describe the answer only; the identity query is not
+        # subject to completeness repair.
+        assert not any(column in plan.visualization_cypher for column in ("issue_count", "scored_count"))
+
+
+def test_visualization_query_shares_the_answer_query_parameters():
+    """One source of truth for a filter value, so the sets cannot diverge."""
+    plan = plan_graph_question(FLOOR_COUNTS)
+    assert "$storey" in plan.cypher
+    assert "$storey" in plan.visualization_cypher
+    assert plan.parameters == {"storey": "BLDG. 1,2,3- LEVEL 6 FLR. FIN."}
+
+
 def test_retriever_executes_planned_parameterized_query_and_reports_completeness(monkeypatch):
     captured = {}
 

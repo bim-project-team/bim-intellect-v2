@@ -87,6 +87,24 @@
       "chat.retrievalStats":
         "Candidates: {candidates} · Reranked: {reranked} · Context chunks: {chunks}",
 
+      "viewer.title": "3D map",
+      "viewer.reset": "Reset view",
+      "viewer.empty": "Ask about elements in the model to see them here.",
+      "viewer.open": "View in 3D",
+      "viewer.openRelated": "Show {types} in 3D",
+      "viewer.loading": "Loading model geometry…",
+      "viewer.elements": "{n} element(s) highlighted",
+      "viewer.scenes": "Storeys shown: {names}",
+      "viewer.boxFallback":
+        "Showing bounding boxes: this project has no exported 3D geometry. Re-run the pipeline to generate it.",
+      "viewer.relatedNotice":
+        "Not evidence for this answer — showing all {types} in the model for orientation only.",
+      "viewer.unavailable": "No 3D geometry is available for this project.",
+      "viewer.truncated": "Showing the first {n} elements only.",
+      "viewer.sceneLimit": "Showing {shown} of {total} storeys to keep the download small.",
+      "viewer.noMatch":
+        "The identified elements are not present in the exported geometry. Re-run the pipeline for this project.",
+
       "pipeline.title": "Graph pipeline",
       "pipeline.subtitle":
         "Federate IFC models, import them, then run clash detection.",
@@ -258,6 +276,24 @@
       "chat.interpretedQuery": "پرسش تفسیرشده",
       "chat.retrievalStats":
         "نامزدها: {candidates} · بازرتبه‌بندی: {reranked} · قطعه‌های زمینه: {chunks}",
+
+      "viewer.title": "نقشه سه‌بعدی",
+      "viewer.reset": "بازنشانی نما",
+      "viewer.empty": "درباره اعضای مدل بپرسید تا اینجا نمایش داده شوند.",
+      "viewer.open": "نمایش سه‌بعدی",
+      "viewer.openRelated": "نمایش سه‌بعدی {types}",
+      "viewer.loading": "در حال بارگذاری هندسه مدل…",
+      "viewer.elements": "{n} عضو مشخص شد",
+      "viewer.scenes": "طبقات نمایش‌داده‌شده: {names}",
+      "viewer.boxFallback":
+        "نمایش جعبه‌های مرزی: برای این پروژه هندسه سه‌بعدی تولید نشده است. برای ساخت آن خط پردازش را دوباره اجرا کنید.",
+      "viewer.relatedNotice":
+        "شواهد این پاسخ نیست — تنها برای موقعیت‌یابی، همه {types} مدل نمایش داده می‌شود.",
+      "viewer.unavailable": "هندسه سه‌بعدی برای این پروژه در دسترس نیست.",
+      "viewer.truncated": "تنها {n} عضو نخست نمایش داده می‌شود.",
+      "viewer.sceneLimit": "برای کوچک ماندن حجم بارگذاری، {shown} طبقه از {total} طبقه نمایش داده می‌شود.",
+      "viewer.noMatch":
+        "اعضای شناسایی‌شده در هندسه تولیدشده وجود ندارند. خط پردازش این پروژه را دوباره اجرا کنید.",
 
       "pipeline.title": "خط پردازش گراف",
       "pipeline.subtitle":

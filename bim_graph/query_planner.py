@@ -3,6 +3,13 @@
 The planner intentionally handles shapes where a plausible but incomplete
 free-form Cypher query is dangerous (grouped counts, exact type counts and
 property-presence statistics). Novel questions still use the LLM generator.
+
+Each plan may also carry a `visualization_cypher`: a second hand-written,
+parameterized query that returns the identities of the elements the answer is
+about. Aggregate answers like `count(r)` name no element, so without this the
+3D viewer would have nothing to highlight for the most common question shapes.
+It reuses the answer query's filters and parameters verbatim, which keeps the
+highlight provably the same element set the count was taken over.
 """
 
 from __future__ import annotations
@@ -19,6 +26,24 @@ class GraphQueryPlan:
     required_columns: tuple[str, ...] = ()
     requested_outputs: tuple[str, ...] = ()
     source: str = "planner"
+    # Optional identity query for the 3D viewer. Never used for the answer, so
+    # a failure here degrades visualization only.
+    visualization_cypher: str = ""
+
+
+# Endpoint identity projection shared by the CLASHES_WITH plans. Both endpoints
+# are returned because a clash is a fact about a pair, not about one element.
+_CLASH_ENDPOINT_PROJECTION = (
+    "RETURN a.id AS element_a_id, coalesce(a.ifcGuid, a.id) AS element_a_guid, "
+    "a.name AS element_a_name, a.ifcType AS element_a_type, "
+    "a.storeyName AS element_a_storey, "
+    "b.id AS element_b_id, coalesce(b.ifcGuid, b.id) AS element_b_guid, "
+    "b.name AS element_b_name, b.ifcType AS element_b_type, "
+    "b.storeyName AS element_b_storey"
+)
+# Bounded independently of the answer query: 250 relationships is up to 500
+# distinct elements, which is the viewer's highlight cap.
+_VISUALIZATION_LIMIT = 250
 
 
 _IFC_TYPE = re.compile(r"\bIfc[A-Za-z][A-Za-z0-9_]*(?![A-Za-z0-9_])")
@@ -52,17 +77,24 @@ def _issue_count_plan(question: str) -> GraphQueryPlan | None:
         where = "WHERE a.storeyName = $storey OR b.storeyName = $storey "
         parameters["storey"] = storey
         intent = "issues_by_type_on_storey"
+    match_clause = f"MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) {where}"
     return GraphQueryPlan(
         intent=intent,
         cypher=(
-            "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
-            f"{where}"
+            f"{match_clause}"
             "RETURN r.issue AS issue_type, count(r) AS issue_count "
             "ORDER BY issue_type"
         ),
         parameters=parameters,
         required_columns=("issue_type", "issue_count"),
         requested_outputs=("count grouped by CLASHES_WITH.issue",),
+        # Same MATCH and WHERE as the count above, so the highlighted elements
+        # are exactly the ones counted. Ordered by severity so truncation keeps
+        # the worst clashes.
+        visualization_cypher=(
+            f"{match_clause}{_CLASH_ENDPOINT_PROJECTION} "
+            f"ORDER BY r.metric DESC LIMIT {_VISUALIZATION_LIMIT}"
+        ),
     )
 
 
@@ -78,6 +110,16 @@ def _anomaly_plan(question: str) -> GraphQueryPlan | None:
         ),
         required_columns=("scored_count", "anomaly_count"),
         requested_outputs=("anomalyScore presence count", "isAnomaly=true count"),
+        # Only the flagged elements are worth showing; the scored population is
+        # every element in the graph. Highest score first so truncation keeps
+        # the most anomalous.
+        visualization_cypher=(
+            "MATCH (e:Element) WHERE e.isAnomaly = true "
+            "RETURN e.id AS element_id, coalesce(e.ifcGuid, e.id) AS element_guid, "
+            "e.name AS element_name, e.ifcType AS element_type, "
+            "e.storeyName AS element_storey "
+            f"ORDER BY e.anomalyScore DESC LIMIT {_VISUALIZATION_LIMIT}"
+        ),
     )
 
 
@@ -86,12 +128,15 @@ def _relationship_listing_plan(question: str) -> GraphQueryPlan | None:
     if len(types) < 2 or not (_ISSUE.search(question) and _LIST.search(question)):
         return None
     parameters = {"type_a": types[0], "type_b": types[1]}
+    match_clause = (
+        "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
+        "WHERE (a.ifcType = $type_a AND b.ifcType = $type_b) "
+        "OR (a.ifcType = $type_b AND b.ifcType = $type_a) "
+    )
     return GraphQueryPlan(
         intent="typed_clashes_with_listing",
         cypher=(
-            "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
-            "WHERE (a.ifcType = $type_a AND b.ifcType = $type_b) "
-            "OR (a.ifcType = $type_b AND b.ifcType = $type_a) "
+            f"{match_clause}"
             "RETURN r.issue AS issue_type, r.metric AS metric, "
             "a.name AS element_a_name, a.id AS element_a_id, "
             "b.name AS element_b_name, b.id AS element_b_id "
@@ -105,6 +150,12 @@ def _relationship_listing_plan(question: str) -> GraphQueryPlan | None:
             "element_b_name", "element_b_id",
         ),
         requested_outputs=("relationship rows with issue, metric, endpoint names and IDs",),
+        # The answer query already names both endpoints, but only by graph id.
+        # This adds ifcGuid and storey, which the viewer needs to locate a mesh.
+        visualization_cypher=(
+            f"{match_clause}{_CLASH_ENDPOINT_PROJECTION} "
+            f"ORDER BY r.metric DESC LIMIT {_VISUALIZATION_LIMIT}"
+        ),
     )
 
 
@@ -118,12 +169,23 @@ def _exact_ifc_type_count_plan(question: str) -> GraphQueryPlan | None:
         for index in range(len(types))
     ]
     columns = tuple(f"ifc_type_{index}_count" for index in range(len(types)))
+    type_predicate = " OR ".join(f"e.ifcType = $ifc_type_{index}" for index in range(len(types)))
     return GraphQueryPlan(
         intent="exact_ifc_type_counts",
         cypher="MATCH (e:Element) RETURN " + ", ".join(projections),
         parameters=parameters,
         required_columns=columns,
         requested_outputs=tuple(f"exact count of {value}" for value in types),
+        # The counting query uses CASE over every element, which returns no
+        # identity. This re-selects the same types explicitly so the viewer can
+        # show a representative sample of what was counted.
+        visualization_cypher=(
+            f"MATCH (e:Element) WHERE {type_predicate} "
+            "RETURN e.id AS element_id, coalesce(e.ifcGuid, e.id) AS element_guid, "
+            "e.name AS element_name, e.ifcType AS element_type, "
+            "e.storeyName AS element_storey "
+            f"ORDER BY e.ifcType, e.name LIMIT {_VISUALIZATION_LIMIT}"
+        ),
     )
 
 

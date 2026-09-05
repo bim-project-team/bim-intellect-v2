@@ -15,6 +15,7 @@ BIM-Intellect combines IFC geometry, a Neo4j building graph, a multilingual regu
 - Versioned multilingual regulation RAG using local Sentence Transformer embeddings and ChromaDB
 - Multi-query retrieval, hybrid/cross-encoder reranking, section expansion, and lexical fallback
 - Schema-aware graph query planning with parameterized Cypher and result-completeness checks
+- Storey-partitioned glTF export and a 3D map that highlights the elements an answer identified
 - Clause/page citation validation that fails closed on unsupported regulatory claims
 - Bounded conversation memory and standard/strong model profiles
 - Responsive bilingual UI with mirrored RTL layout and content-aware text direction
@@ -66,12 +67,29 @@ flowchart LR
 
 The web workspace has four views:
 
-- **Chat** routes questions to regulations, the building graph, both sources, or conversation handling. It displays citations, graph elements, model mode, and retrieval diagnostics.
+- **Chat** routes questions to regulations, the building graph, both sources, or conversation handling. It displays citations, graph elements, model mode, and retrieval diagnostics. When an answer identifies specific BIM elements, a 3D map opens beside it with those elements highlighted in their storey.
 - **Pipeline** uploads and registers multiple IFC files, selects a project/model set and optional storey/type filters, imports the graph, and runs clash analysis.
 - **Results** separates all issues, volumetric clashes, and clearance violations, with graph-derived storey/type filters.
 - **Documents** uploads multiple regulation PDFs, lists what is actually indexed, and manages the configured collection.
 
 English and Persian translations live in `static/i18n.js`. The layout uses CSS logical properties for RTL mirroring, while answers, questions, IFC names, IDs, metrics, and citations preserve the direction appropriate to their content.
+
+## 3D visualization
+
+Every answer carries a `visualization` block whose `reason` states what can be shown and why:
+
+| `reason` | Meaning |
+|---|---|
+| `graph_elements` | The graph identified specific elements; the map opens with them highlighted |
+| `related_types` | No element evidence, but the subject maps to IFC types the user may opt into viewing — labelled as orientation, not evidence |
+| `no_evidence` | Nothing to show and nothing to offer |
+| `graph_unavailable` | The graph was consulted and failed, which is distinct from finding nothing |
+
+Aggregate answers such as `count(r)` name no element, so `bim_graph/query_planner.py` pairs each plan with a hand-written parameterized identity query that reuses the same filters and parameters. Nothing asks a language model which elements matter.
+
+Project ingestion writes one glTF binary per storey under `dataset/ifc/scenes/`, reusing the tessellation the bounding-box pass already performs — measured at 55s combined versus 73s for bounding boxes alone across 10,887 elements. Each glTF node is named by the element's IFC GlobalId, which is the same identifier the graph stores as `ifcGuid`, so a highlight is a direct name lookup. Geometry stays in project file units to match every stored bounding box and clash metric. Set `build_scenes: false` on the ingest request to import graph data only; projects without exported scenes fall back to the bounding boxes the clash engine measured.
+
+three.js is vendored under `static/vendor/three/` and resolved through an import map, so the viewer needs no bundler and no CDN at runtime.
 
 ## Quick start
 
@@ -253,6 +271,7 @@ All backend routes are mounted below `/api`.
 | Legacy IFC pipeline | `POST /extract`, `POST /load`, `POST /ingest` |
 | Analysis | `POST /analyze`, `GET /clashes`, `GET /violations`, `GET /issues` |
 | Filters | `GET /filters/dataset`, `GET /filters/storeys`, `GET /filters/types` |
+| 3D model | `GET /model/manifest`, `GET /model/scene/{project_id}/{file_id}/{scene_key}`, `GET /model/elements` |
 | Documents | `POST /rag/upload`, `POST /rag/ingest`, `GET /rag/status`, `DELETE /rag/clear` |
 | Questions | `POST /ask`, `POST /ask-vector`, `POST /ask-graph` |
 | Conversation | `DELETE /rag/conversations/{conversation_id}` |
@@ -282,10 +301,12 @@ bim_graph/                   Neo4j, federation, clash, graph QA
 bim_graph/anomaly/           GCN dataset, training, and inference
 rag/                         Chunking, indexing, retrieval, memory, grounding
 static/                      UI styles, localization, and browser logic
+static/vendor/three/         Vendored three.js for the offline-capable 3D viewer
 templates/                   Application HTML shell
 tests/                       Automated regression tests
 docs/                        Detailed subsystem documentation
 artifacts/anomaly/           Model/dataset/result artifacts
+dataset/ifc/scenes/          Generated per-storey glTF (rebuilt by ingestion)
 main.py                      Application entry point
 extract_graph.py             IFC graph and AABB extraction
 Dockerfile                   Application image
@@ -302,7 +323,7 @@ Start from [.env.example](.env.example). Important groups include:
 - `RAG_EMBEDDING_*`, `RAG_COLLECTION_NAME`, and `CHROMA_PERSIST_DIR`
 - retrieval/reranking counts, limits, models, and weights
 - conversation-memory limits and TTL
-- project storage and registry paths
+- project storage and registry paths, and `BIM_SCENE_STORAGE_DIR` for generated 3D geometry
 
 `.env` is ignored by Git and excluded by `.dockerignore`. Do not commit API keys or production credentials.
 
@@ -320,9 +341,12 @@ Additional checks used for the integrated tree:
 ```powershell
 node --check static/app.js
 node --check static/i18n.js
+node --input-type=module --check static/viewer.js
 python -m compileall -q api bim_graph rag main.py extract_graph.py extract_sotreys_type.py
 docker compose -f docker-compose.client.yml config
 ```
+
+`tests/test_scene_export.py` includes one end-to-end IFC-to-glTF export. It skips automatically when no reference IFC file is present.
 
 ## Documentation
 
@@ -332,6 +356,7 @@ docker compose -f docker-compose.client.yml config
 - [Multi-file workflows and federation](docs/MULTI_FILE_WORKFLOWS.md)
 - [Clash detection and graph anomaly](docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md)
 - [Graph RAG query improvements](docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md)
+- [3D visualization](docs/3D_VISUALIZATION.md)
 
 ## Security and production readiness
 

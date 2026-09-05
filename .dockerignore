@@ -19,6 +19,10 @@ venv
 chroma_db
 artifacts
 
+# Generated viewer geometry: rebuilt at ingest and mounted at runtime, so baking
+# it in would add ~88MB per model to the image for no benefit.
+dataset/ifc/scenes
+
 # Large/raw archives that should normally be mounted or copied intentionally
 *.zip
 

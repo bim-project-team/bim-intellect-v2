@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from bim_graph.graph_retriever import GraphRetriever
+from bim_graph.visualization import build_payload as build_visualization_payload
 
 from .config import SETTINGS, ModelProfile, RAGSettings, get_model_profile
 from .memory import ConversationState, ConversationStore, conversation_store
@@ -81,6 +82,11 @@ class RetrievalResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     regulation: RegulationRetrieval | None = None
     graph_debug: dict[str, Any] = field(default_factory=dict)
+    # Elements the graph identified as the answer's subject, for 3D display.
+    # Kept out of `sources` on purpose: `sources` drives citation chips and is
+    # filtered against what the answer text cites, which is the wrong lifecycle
+    # for a geometry highlight.
+    graph_elements: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def has_any_context(self) -> bool:
@@ -380,6 +386,7 @@ class RAGOrchestrator:
                         f"Query executed: {graph.get('cypher_query', '')}\n\n{graph['context']}"
                     )
                     result.sources.extend(graph.get("sources", []))
+                result.graph_elements = list(graph.get("elements", []))
             except Exception as exc:
                 logger.error("Graph retrieval failed: %s", exc)
                 result.graph_debug = {"error": str(exc)}
@@ -475,6 +482,7 @@ class RAGOrchestrator:
         conversation_id: str | None = None,
         use_strong_models: bool = False,
         source_override: str | None = None,
+        project_id: str | None = None,
     ) -> dict:
         question = (question or "").strip()
         if not question:
@@ -505,6 +513,9 @@ class RAGOrchestrator:
                 "router_model": profile.router_model, "final_model": profile.final_model,
                 "rewritten_query": understanding["standalone_query"],
                 "retrieval_debug": {"intent": "conversation"},
+                # A greeting has no building subject, so there is deliberately
+                # nothing to offer here - not even the opt-in type view.
+                "visualization": build_visualization_payload("", None, project_id=project_id),
             }
 
         # Free-form Cypher generation is part of query understanding. In strong
@@ -538,8 +549,13 @@ class RAGOrchestrator:
                 "برای جلوگیری از ارائه ادعای بدون منبع، پاسخ نمایش داده نشد."
             )
             answer_sources: list[dict] = []
+            # The answer was withheld, so there is no claim for geometry to
+            # illustrate. Highlighting elements here would imply the system
+            # verified something it just refused to state.
+            answer_elements: list[dict] = []
         else:
             answer_sources = sources_used_by_answer(answer, retrieval.sources)
+            answer_elements = retrieval.graph_elements
 
         chunk_ids = [chunk.chunk_id for chunk in (retrieval.regulation.chunks if retrieval.regulation else [])]
         self.memory.append_turn(
@@ -573,4 +589,12 @@ class RAGOrchestrator:
             "final_model": profile.final_model,
             "rewritten_query": understanding["standalone_query"],
             "retrieval_debug": diagnostics,
+            # Matched on the rewritten query so a follow-up ("what about the
+            # stairs there?") resolves against the same subject the retrieval
+            # used, not against the elliptical original.
+            "visualization": build_visualization_payload(
+                understanding["standalone_query"],
+                {"elements": answer_elements, **retrieval.graph_debug},
+                project_id=project_id,
+            ),
         }
