@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .config import SETTINGS, RAGSettings
+from .document_metadata import metadata_domain, normalize_domain_filter
 from .embedder import get_all_chunks, get_chunks_by_ids, get_section_chunks, query_similar
 from .reranker import Candidate, rerank_candidates
 
@@ -24,6 +25,7 @@ class RetrievalDiagnostics:
     final_context_sections: int = 0
     fallback_used: bool = False
     documents_pages: list[str] = field(default_factory=list)
+    document_domains: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -38,10 +40,15 @@ class RegulationRetrieval:
         return max((chunk.rerank_score for chunk in self.chunks), default=0.0)
 
 
-def _merge_vector_results(queries: list[str], settings: RAGSettings) -> list[Candidate]:
+def _merge_vector_results(
+    queries: list[str], settings: RAGSettings, document_domains: tuple[str, ...] = (),
+) -> list[Candidate]:
     merged: dict[str, Candidate] = {}
     for query in queries:
-        results = query_similar(query, n_results=settings.candidate_count, settings=settings)
+        results = query_similar(
+            query, n_results=settings.candidate_count, settings=settings,
+            document_domains=document_domains,
+        )
         rows = zip(
             (results.get("ids") or [[]])[0],
             (results.get("documents") or [[]])[0],
@@ -50,7 +57,9 @@ def _merge_vector_results(queries: list[str], settings: RAGSettings) -> list[Can
         )
         for rank, (chunk_id, text, metadata, distance) in enumerate(rows, start=1):
             metadata = metadata or {}
-            if metadata.get("is_toc"):
+            if metadata.get("is_toc") or (
+                document_domains and metadata_domain(metadata) not in set(document_domains)
+            ):
                 continue
             candidate = merged.get(chunk_id)
             score = max(0.0, 1.0 - float(distance))
@@ -64,8 +73,13 @@ def _merge_vector_results(queries: list[str], settings: RAGSettings) -> list[Can
     return list(merged.values())
 
 
-def _lexical_fallback(query: str, settings: RAGSettings) -> list[Candidate]:
-    records = get_all_chunks(settings=settings, limit=settings.lexical_pool_limit)
+def _lexical_fallback(
+    query: str, settings: RAGSettings, document_domains: tuple[str, ...] = (),
+) -> list[Candidate]:
+    records = get_all_chunks(
+        settings=settings, limit=settings.lexical_pool_limit,
+        document_domains=document_domains,
+    )
     candidates = [
         Candidate(record["id"], record["document"], record["metadata"], expansion_reason="lexical_fallback")
         for record in records
@@ -214,10 +228,18 @@ def assemble_context(
         clause = str(metadata.get("clause_id", "unknown"))
         page = int(metadata.get("page_number", 0))
         source = str(metadata.get("source", "Unknown source"))
+        document_id = str(metadata.get("document_id", source))
+        domain = metadata_domain(metadata)
+        standard_name = str(metadata.get("standard_name", ""))
+        standard_version = str(metadata.get("standard_version", ""))
         section = str(metadata.get("section_id", "unknown"))
         blocks.append(
             f'<SOURCE id="source_{source_index}">\n'
             f"Document: {source}\n"
+            f"Document-ID: {document_id}\n"
+            f"Domain: {domain}\n"
+            f"Standard: {standard_name or 'unspecified'}\n"
+            f"Standard-Version: {standard_version or 'unspecified'}\n"
             f"Clause: {clause}\n"
             f"Page: {page}\n"
             f"Section: {section}\n"
@@ -225,14 +247,19 @@ def assemble_context(
             f"Text:\n{item.text}\n"
             f"</SOURCE>"
         )
-        source_key = (source, clause, page)
-        if clause not in {"", "unknown", "None"} and page and source_key not in seen_sources:
+        source_key = (document_id, clause if clause not in {"", "unknown", "None"} else section, page)
+        if page and source_key not in seen_sources:
             seen_sources.add(source_key)
             sources.append({
                 "type": "regulation",
                 "source": source,
                 "clause_id": clause,
                 "page_number": page,
+                "document_id": document_id,
+                "document_domain": domain,
+                "standard_name": standard_name,
+                "standard_version": standard_version,
+                "section_id": section,
             })
     return "\n\n".join(blocks), sources, selected
 
@@ -242,13 +269,17 @@ def retrieve_regulations(
     retrieval_queries: list[str] | None = None,
     *,
     completeness_requested: bool = False,
+    document_domains: list[str] | tuple[str, ...] | None = None,
     settings: RAGSettings = SETTINGS,
 ) -> RegulationRetrieval:
     queries = [standalone_query, *(retrieval_queries or [])]
     queries = [value.strip() for value in dict.fromkeys(queries) if value and value.strip()]
     queries = queries[:settings.max_query_variants]
-    diagnostics = RetrievalDiagnostics(retrieval_queries=queries)
-    candidates = _merge_vector_results(queries, settings)
+    domains = normalize_domain_filter(document_domains)
+    diagnostics = RetrievalDiagnostics(
+        retrieval_queries=queries, document_domains=list(domains),
+    )
+    candidates = _merge_vector_results(queries, settings, domains)
     diagnostics.vector_candidates = len(candidates)
     ranked = rerank_candidates(
         standalone_query,
@@ -259,7 +290,7 @@ def retrieve_regulations(
 
     # One bounded fallback pass broadens lexical recall if semantic evidence is weak.
     if not ranked or max((item.dense_score for item in candidates), default=0.0) < settings.weak_relevance_threshold:
-        fallback = _lexical_fallback(standalone_query, settings)
+        fallback = _lexical_fallback(standalone_query, settings, domains)
         diagnostics.fallback_used = True
         diagnostics.lexical_candidates = len(fallback)
         candidates = _merge_candidates(candidates, fallback)

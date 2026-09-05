@@ -893,6 +893,10 @@ select[multiple] {
   border-style: dashed;
 }
 
+.chat-source-tag.sustainability {
+  border-style: double;
+}
+
 /* --- Welcome state --- */
 
 .chat-welcome {
@@ -1789,6 +1793,190 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
   color: var(--fg-light);
   font-style: italic;
   font-size: 0.8rem;
+}
+
+/* ==========================================================================
+   Sustainability dashboard
+   ========================================================================== */
+
+.sustainability-layout {
+  display: grid;
+  gap: 1rem;
+  max-width: 1380px;
+  margin-inline: auto;
+}
+
+.sustainability-scope-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(260px, 1.5fr);
+  gap: 0.75rem 1.25rem;
+  align-items: start;
+}
+
+.sustainability-derived-control,
+#sustainability-status {
+  grid-column: 1 / -1;
+}
+
+.inline-field {
+  min-width: 190px;
+}
+
+.sustainability-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
+.sustainability-kpi,
+.quality-card {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow-panel);
+  padding: 0.9rem;
+  min-width: 0;
+}
+
+.sustainability-kpi-label,
+.quality-card-label {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  min-height: 2em;
+}
+
+.sustainability-kpi-value,
+.quality-card-value {
+  display: block;
+  margin-block-start: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  text-align: start;
+}
+
+.sustainability-kpi small {
+  display: block;
+  margin-block-start: 0.2rem;
+  color: var(--fg-light);
+  font-size: 0.65rem;
+}
+
+.carbon-bars {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.carbon-bar-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 2fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.carbon-bar-label {
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.carbon-bar-track {
+  height: 0.65rem;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+}
+
+.carbon-bar-fill {
+  height: 100%;
+  background: var(--surface-dark);
+  min-width: 0;
+}
+
+.carbon-bar-value {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  direction: ltr;
+  white-space: nowrap;
+}
+
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: 0.65rem;
+}
+
+.quality-card.has-issues {
+  border-color: var(--fg-muted);
+}
+
+.quality-card-value {
+  font-size: 1rem;
+}
+
+.quality-detail-table {
+  margin-block-start: 1rem;
+}
+
+.sustainability-table {
+  min-width: 1120px;
+}
+
+.evidence-cell {
+  min-width: 260px;
+  max-width: 520px;
+  white-space: pre-wrap;
+}
+
+.status-badge,
+.quantity-badge {
+  display: inline-block;
+  margin-block-start: 0.25rem;
+  padding: 0.14rem 0.38rem;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.status-badge.status-insufficient_evidence,
+.status-badge.status-not_satisfied_from_available_evidence,
+.quantity-badge.estimated {
+  border-color: var(--fg-muted);
+}
+
+@media (max-width: 1180px) {
+  .sustainability-kpis {
+    grid-template-columns: repeat(3, minmax(130px, 1fr));
+  }
+
+  .quality-grid {
+    grid-template-columns: repeat(4, minmax(110px, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .sustainability-scope-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sustainability-derived-control,
+  #sustainability-status {
+    grid-column: auto;
+  }
+
+  .sustainability-kpis,
+  .quality-grid {
+    grid-template-columns: repeat(2, minmax(110px, 1fr));
+  }
+
+  .carbon-bar-row {
+    grid-template-columns: minmax(90px, 0.8fr) minmax(100px, 1.5fr);
+  }
+
+  .carbon-bar-value {
+    grid-column: 2;
+  }
 }
 
 /* ==========================================================================

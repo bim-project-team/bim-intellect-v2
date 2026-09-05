@@ -9,6 +9,7 @@ venv/
 
 # Notebooks
 .notebooks/
+.pdfs/
 
 # Tests - ignore all except selected tests
 tests/
@@ -19,6 +20,9 @@ tests/*
 !tests/test_multifile_workflows.py
 !tests/test_graph_query_planner.py
 !tests/test_graph_retrieval_regression.py
+!tests/test_sustainability_phase1.py
+!tests/test_sustainability_leed_rag.py
+!tests/test_sustainability_phase3.py
 
 # Environment variables
 .env

@@ -6,8 +6,9 @@ Use the conversation summary and recent turns to interpret the current message. 
 in isolation. Distinguish normal social conversation from a request to continue a technical answer.
 
 Knowledge sources:
-- vector: engineering regulations, standards, safety, maintenance and technical PDFs.
+- vector: classified engineering documents. document_domains selects any of regulation, sustainability, leed, standard.
 - graph: facts about the actual IFC/BIM building, elements, relationships, measurements and clashes.
+- sustainability: stored deterministic material, quantity, factor-provenance and embodied-carbon results for a project/file scope.
 
 Return ONLY one JSON object with exactly these fields:
 {
@@ -15,6 +16,10 @@ Return ONLY one JSON object with exactly these fields:
   "retrieval_queries": ["2 to 4 semantically varied search queries"],
   "needs_vector": true,
   "needs_graph": false,
+  "needs_sustainability": false,
+  "needs_leed_assessment": false,
+  "document_domains": ["regulation"],
+  "sustainability_intent": "summary|top_materials|by_file|top_elements|missing_evidence|leed_assessment|general",
   "is_technical": true,
   "intent": "technical|conversation|unrelated",
   "is_follow_up": false,
@@ -29,6 +34,10 @@ Rules:
 - completeness_requested is true when the intent asks for all items, missing items, more detail, continuation, or completion.
 - For continuation, standalone_query must explicitly state the prior topic and ask for additional/complete source material.
 - Generic engineering/regulatory questions use vector only. Actual building/model facts use graph only. Compliance of an actual model condition uses both.
+- Questions about stored embodied-carbon totals, contributors, source IFC files, or missing material/quantity evidence use sustainability, not free-form graph arithmetic.
+- LEED/document requirements use vector with document_domains drawn only from leed, sustainability, standard. Ordinary building regulations use regulation. A project-versus-LEED question uses both sustainability and vector and sets needs_leed_assessment=true.
+- Add graph only when additional non-sustainability BIM facts are required. The sustainability source already owns deterministic carbon result queries.
+- Never treat a model profile as evidence and never ask a language model to calculate carbon.
 - Greetings, thanks and acknowledgements use neither source and intent=conversation.
 - Never add a graph route just because an engineering component is named.
 """
@@ -36,10 +45,10 @@ Rules:
 CONVERSATION_PROMPT = """Respond naturally and briefly to the user's conversational message.
 Use the same language as the user. Do not claim that evidence is missing and do not invent technical facts."""
 
-CITATION_REPAIR_PROMPT = """Revise the draft so every regulatory claim has an immediately adjacent citation copied exactly
-from the supplied evidence. The only permitted citation syntax is [Clause <CLAUSE>, Page <PAGE>] using ASCII digits,
-ASCII hyphens, the English words Clause and Page, and the comma exactly as shown. Copy CLAUSE and PAGE from one SOURCE
-block; never translate or reformat them. Remove unsupported claims and invented citations. Preserve all distinct
+CITATION_REPAIR_PROMPT = """Revise the draft so every documentary claim has an immediately adjacent citation copied exactly
+from the supplied evidence. For a numbered clause use [Clause <CLAUSE>, Page <PAGE>]. For a source without a numbered
+clause use [Document <DOCUMENT-ID>, Section <SECTION>, Page <PAGE>]. Copy all fields from one SOURCE block; never
+translate or invent them. Remove unsupported claims and invented citations. Preserve all distinct
 requirements when the user requested completeness. Return only the corrected answer in the user's language."""
 
 ROUTER_PROMPT = """You are a bilingual Persian/English query router for a BIM and engineering knowledge system.
@@ -51,9 +60,10 @@ Available sources:
 - "vector": the searchable text extracted from all uploaded PDF documents,
   including building regulations, codes, standards, and other reference documents.
 - "graph": Neo4j graph data about building elements, IFC types, spaces, storeys, geometries, clashes, and spatial relationships.
+- "sustainability": deterministic Neo4j sustainability runs containing carbon totals, material/file/type contributors, missing evidence, factor provenance, and calculation statuses.
 
 Respond with ONLY a JSON object in this exact format:
-{"needs_vector": true/false, "needs_graph": true/false, "is_technical": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation"}
+{"needs_vector": true/false, "needs_graph": true/false, "needs_sustainability": true/false, "needs_leed_assessment": true/false, "document_domains": ["regulation|sustainability|leed|standard"], "sustainability_intent": "summary|top_materials|by_file|top_elements|missing_evidence|leed_assessment|general", "is_technical": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation"}
 
 Source semantics:
 - Vector/PDF is the engineering knowledge source. Use it whenever an uploaded
@@ -63,6 +73,8 @@ Source semantics:
 - Graph is the building-instance source. Use it for facts about the actual BIM
   model: particular elements, their IDs/properties/locations/quantities and
   relationships, clashes, clearance violations, and measured model conditions.
+- Sustainability is a separate structured source. Use it for actual-project embodied carbon, contributors, coverage, quantities, missing materials, unmatched factors, and per-file results. Never ask graph free-form Cypher or the final model to recompute these values.
+- LEED and sustainability standards are documentary vector knowledge. For them set document_domains to some or all of ["leed", "sustainability", "standard"]. Do not include ordinary regulation unless it was requested too.
 
 Routing policy:
 - Users normally ask in natural or conversational Persian and often omit words
@@ -79,6 +91,7 @@ Routing policy:
 - Use both sources when the question asks whether an actual model condition
   complies with, violates, or is acceptable under a requirement. Vector supplies
   the rule and graph supplies the actual condition.
+- Use sustainability + vector for a project carbon/material question combined with LEED guidance. Set needs_leed_assessment=true only when the user asks whether the available BIM evidence can evaluate or satisfy a retrieved requirement.
 - If the question asks about an uploaded PDF/document/file, the document corpus,
   extracted knowledge/text, a summary of a document, or what a source/document
   says → needs_vector = true. This applies even when no regulation or clause is
@@ -105,6 +118,10 @@ Examples:
 - "آیا anomalyScore یا isAnomaly در Neo4j ثبت شده است؟" → vector=false, graph=true, is_technical=true
 - "چند CLASH و چند CLEARANCE_VIOLATION ثبت شده است؟" → vector=false, graph=true, is_technical=true
 - "سلام، حالت چطوره؟" → vector=false, graph=false, is_technical=false
+- "What is the estimated embodied carbon of this project?" → vector=false, graph=false, sustainability=true
+- "Which materials contribute most and what LEED guidance applies?" → vector=true, graph=false, sustainability=true, domains=["leed","sustainability","standard"]
+- "What does LEED require for materials?" → vector=true, graph=false, sustainability=false, domains=["leed","sustainability","standard"]
+- "آیا اطلاعات موجود در مدل برای بررسی این معیار LEED کافی است؟" → vector=true, sustainability=true, needs_leed_assessment=true, domains=["leed","sustainability","standard"]
 - "یک شعر بنویس" → vector=false, graph=false, is_technical=false
 
 - Output ONLY the JSON. No markdown fences, no extra text.
@@ -176,6 +193,12 @@ Context from Uploaded PDF Documents:
 Context from Building Graph Database (Neo4j IFC model):
 {graph_context}
 
+Context from Deterministic Sustainability Results:
+{sustainability_context}
+
+Conservative LEED-Oriented Assessment State:
+{assessment_context}
+
 Relevant conversation context (for intent and avoiding needless repetition; it is not evidence):
 {conversation_context}
 
@@ -201,10 +224,14 @@ Instructions:
 7. If only one source was retrieved, answer only from that source. Do not speculate about information that might exist in the other source.
 8. Every numeric value in the answer must appear verbatim in the provided context. Do not substitute, approximate, convert, or infer numeric values.
 
+8a. Carbon quantities, factors, totals, and kgCO2e values may be copied only from the deterministic sustainability context. Never calculate them. Model-profile choice cannot change them.
+
 9. For regulatory requirements, every bullet or claim must include its supporting citation immediately after the claim.
    Do not put citations only in a detached references list at the end.
 
 10. Never output a citation with clause_id equal to "unknown", "none", "null", or an empty value.
+
+10a. For documentary evidence without a numbered clause, cite [Document <document_id>, Section <section_id>, Page <page_number>] using the exact SOURCE metadata. Do not invent LEED credit names or identifiers.
 
 11. If the context contains conflicting values, report the conflict and cite the relevant clauses. Do not choose a value silently.
 
@@ -212,6 +239,7 @@ Instructions:
    "اطلاعات کافی برای این الزام در بخش‌های بازیابی‌شده وجود ندارد."
 
 13. Use only the regulation context for regulatory requirements. Do not use general model knowledge or building graph context to fill in missing regulation values.
+13a. Keep documentary requirements separate from project assessment. Use only these assessment states: satisfied_from_available_evidence, not_satisfied_from_available_evidence, insufficient_evidence, not_automatically_evaluable. Do not claim LEED Certified, Silver, Gold, Platinum, a credit award, or certification eligibility.
 14. Answer in the language of the user's current message (normally natural Persian).
 15. When the user asks for all items, completion, continuation, or more detail, preserve every distinct relevant source item. Do not merge a long source list into a few vague summaries.
 16. For a follow-up requesting more, prioritize material omitted from the previous answer, but retain enough organization to make the continuation understandable.

@@ -13,6 +13,7 @@ from pathlib import Path
 from .chunker import chunk_pdf_with_diagnostics
 from .config import SETTINGS, RAGSettings
 from .embedder import collection_status, embed_and_store, get_client_db
+from .document_metadata import classify_document
 
 logger = logging.getLogger("bim_intellect.rag.indexer")
 
@@ -45,6 +46,9 @@ def build_index(
     chunk_size: int = 1200,
     settings: RAGSettings = SETTINGS,
     manifest_path: str | Path | None = None,
+    document_domain: str = "regulation",
+    standard_name: str = "",
+    standard_version: str = "",
 ) -> dict:
     source_dir = Path(source_dir)
     if not source_dir.exists():
@@ -54,6 +58,7 @@ def build_index(
         raise ValueError(f"No PDF files found under {source_dir}")
     if rebuild:
         rebuild_collection(settings)
+    classification = classify_document(document_domain, standard_name, standard_version)
 
     seen_hashes: dict[str, str] = {}
     manifest: dict = {
@@ -64,6 +69,9 @@ def build_index(
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.embedding_model,
         "chunk_size": chunk_size,
+        "document_domain": classification.document_domain,
+        "standard_name": classification.standard_name,
+        "standard_version": classification.standard_version,
         "documents": [],
         "duplicate_files": [],
         "chunk_count": 0,
@@ -88,6 +96,9 @@ def build_index(
             source=pdf_path.name,
             chunk_size=chunk_size,
             overlap=0,
+            document_domain=classification.document_domain,
+            standard_name=classification.standard_name,
+            standard_version=classification.standard_version,
         )
         # Some Persian PDF fonts extract the visible chapter number with an
         # incorrect glyph mapping (the Mabhas 12 corpus yields root "01").
@@ -120,6 +131,9 @@ def build_index(
             "unlabeled_chunks": result.unlabeled_chunk_count,
             "toc_chunks": sum(chunk.is_toc for chunk in result.chunks),
             "extraction_error_pages": result.pages_with_errors,
+            "document_domain": classification.document_domain,
+            "standard_name": classification.standard_name,
+            "standard_version": classification.standard_version,
         })
         logger.info("Indexed %s: %d chunks", pdf_path.name, indexed)
 
@@ -137,6 +151,9 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=1200)
     parser.add_argument("--manifest")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--document-domain", default="regulation")
+    parser.add_argument("--standard-name", default="")
+    parser.add_argument("--standard-version", default="")
     args = parser.parse_args()
     if args.status:
         print(json.dumps(collection_status(), ensure_ascii=False, indent=2))
@@ -146,6 +163,9 @@ def main() -> None:
         rebuild=args.rebuild,
         chunk_size=args.chunk_size,
         manifest_path=args.manifest,
+        document_domain=args.document_domain,
+        standard_name=args.standard_name,
+        standard_version=args.standard_version,
     )
     print(json.dumps({
         "documents": len(manifest["documents"]),

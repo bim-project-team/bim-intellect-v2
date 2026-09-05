@@ -13,6 +13,7 @@ from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 from .chunker import Chunk, normalize_persian_text
 from .config import SETTINGS, RAGSettings
 from .openrouter_client import LLMConfigError, LLMRequestError, call_with_retries, get_client, logger
+from .document_metadata import metadata_domain, normalize_domain_filter
 
 CHROMA_DIR = SETTINGS.chroma_dir
 COLLECTION_NAME = SETTINGS.collection_name
@@ -135,7 +136,11 @@ def get_or_create_collection(
 
 
 def _embedding_text(chunk: Chunk) -> str:
-    labels = [chunk.document_title or chunk.source, chunk.chapter, chunk.clause_id, chunk.heading]
+    labels = [
+        chunk.document_title or chunk.source, chunk.document_domain,
+        chunk.standard_name, chunk.standard_version,
+        chunk.chapter, chunk.clause_id, chunk.heading,
+    ]
     prefix = " | ".join(str(value) for value in labels if value and value != "unknown")
     return f"{prefix}\n{chunk.text}" if prefix else chunk.text
 
@@ -145,6 +150,9 @@ def _metadata(chunk: Chunk, ingested_at: str = "") -> dict[str, Any]:
         "source": chunk.source or "unknown",
         "document_id": chunk.document_id or "unknown",
         "document_title": chunk.document_title or chunk.source or "unknown",
+        "document_domain": chunk.document_domain or "regulation",
+        "standard_name": chunk.standard_name or "",
+        "standard_version": chunk.standard_version or "",
         "page_number": int(chunk.page_number),
         "clause_id": chunk.clause_id or "unknown",
         "chapter": chunk.chapter or "",
@@ -197,6 +205,7 @@ def query_similar(
     query_text: str,
     n_results: int | None = None,
     settings: RAGSettings = SETTINGS,
+    document_domains: list[str] | tuple[str, ...] | None = None,
 ):
     if not query_text or not query_text.strip():
         raise LLMRequestError("Semantic retrieval requires a non-empty query.")
@@ -205,10 +214,27 @@ def query_similar(
     if count == 0:
         logger.warning("Regulation collection '%s' is empty", settings.collection_name)
         return _empty_query_result()
+    domains = normalize_domain_filter(document_domains)
+    where = None
+    # Newly classified sustainability domains can be filtered directly in
+    # Chroma. Regulation-inclusive queries remain unfiltered here so legacy
+    # chunks without document_domain continue to behave as regulations; the
+    # retrieval layer applies the same normalized post-filter.
+    if domains and "regulation" not in domains:
+        where = (
+            {"document_domain": domains[0]}
+            if len(domains) == 1
+            else {"document_domain": {"$in": list(domains)}}
+        )
+    kwargs: dict[str, Any] = {
+        "query_texts": [normalize_persian_text(query_text)],
+        "n_results": min(n_results or settings.candidate_count, count),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if where:
+        kwargs["where"] = where
     return collection.query(
-        query_texts=[normalize_persian_text(query_text)],
-        n_results=min(n_results or settings.candidate_count, count),
-        include=["documents", "metadatas", "distances"],
+        **kwargs,
     )
 
 
@@ -265,18 +291,30 @@ def get_section_chunks(
 def get_all_chunks(
     limit: int | None = None,
     settings: RAGSettings = SETTINGS,
+    document_domains: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     collection = get_or_create_collection(settings=settings)
     kwargs: dict[str, Any] = {"include": ["documents", "metadatas"]}
     if limit is not None:
         kwargs["limit"] = limit
+    domains = normalize_domain_filter(document_domains)
+    if domains and "regulation" not in domains:
+        kwargs["where"] = (
+            {"document_domain": domains[0]}
+            if len(domains) == 1
+            else {"document_domain": {"$in": list(domains)}}
+        )
     result = collection.get(**kwargs)
-    return [
+    records = [
         {"id": chunk_id, "document": document, "metadata": metadata or {}}
         for chunk_id, document, metadata in zip(
             result.get("ids", []), result.get("documents", []), result.get("metadatas", [])
         )
     ]
+    if domains:
+        allowed = set(domains)
+        records = [item for item in records if metadata_domain(item["metadata"]) in allowed]
+    return records
 
 
 def collection_status(settings: RAGSettings = SETTINGS) -> dict[str, Any]:
@@ -302,6 +340,9 @@ def list_indexed_documents(settings: RAGSettings = SETTINGS) -> list[dict[str, A
             "chunk_count": 0,
             "pages": set(),
             "ingested_at": metadata.get("ingested_at") or None,
+            "document_domain": metadata_domain(metadata),
+            "standard_name": metadata.get("standard_name") or "",
+            "standard_version": metadata.get("standard_version") or "",
         })
         item["chunk_count"] += 1
         if metadata.get("page_number"):

@@ -22,7 +22,6 @@ import os
 import shutil
 import sys
 import tempfile
-import threading
 import uuid
 from pathlib import Path
 from typing import Annotated, List, Optional
@@ -43,9 +42,12 @@ from bim_graph.project_registry import (
     PROJECT_ROOT, get_files, list_projects, register_uploaded_file, safe_id,
     update_file, utc_now, list_unregistered_ifc_files,
 )
+from bim_graph.pipeline_lock import PIPELINE_LOCK
+from api.sustainability_routes import router as sustainability_router
 
 router = APIRouter()
-_PIPELINE_LOCK = threading.RLock()
+router.include_router(sustainability_router, prefix="/sustainability", tags=["sustainability"])
+_PIPELINE_LOCK = PIPELINE_LOCK
 
 
 def _normalize_upload_files(value):
@@ -105,6 +107,8 @@ class QuestionRequest(BaseModel):
     conversation_id: Optional[str] = None
     use_strong_models: bool = False
     selected_element_id: Optional[str] = None
+    project_id: Optional[str] = None
+    file_ids: Optional[List[str]] = None
 
 
 class ProjectIngestRequest(BaseModel):
@@ -624,6 +628,9 @@ def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = Non
 async def upload_pdf(
     request: Request,
     doc_id: Optional[str] = Query(None, description="Document ID prefix for chunk IDs (defaults to filename stem)"),
+    document_domain: Optional[str] = Query(None, description="regulation, sustainability, leed, or standard"),
+    standard_name: Optional[str] = Query(None),
+    standard_version: Optional[str] = Query(None),
 ):
     # Read repeated multipart values directly.  Older FastAPI/Pydantic
     # combinations can incorrectly validate one UploadFile as a list or reject
@@ -635,6 +642,11 @@ async def upload_pdf(
         raise HTTPException(422, "The 'files' and 'file' fields must contain uploaded files.")
 
     _ensure_rag()
+    from rag.document_metadata import classify_document
+    try:
+        classification = classify_document(document_domain, standard_name, standard_version)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if not uploads:
         raise HTTPException(400, "Select at least one PDF file.")
     results = []
@@ -650,7 +662,12 @@ async def upload_pdf(
             from bim_graph.project_registry import file_sha256
             automatic_id = f"{Path(filename).stem}-{file_sha256(tmp_path)[:12]}"
             effective_doc_id = doc_id if len(uploads) == 1 and doc_id else automatic_id
-            chunks = _RAG_CHUNKER(tmp_path, doc_id=effective_doc_id, source=filename)
+            chunks = _RAG_CHUNKER(
+                tmp_path, doc_id=effective_doc_id, source=filename,
+                document_domain=classification.document_domain,
+                standard_name=classification.standard_name,
+                standard_version=classification.standard_version,
+            )
             if not chunks:
                 raise ValueError("No text could be extracted from the PDF.")
             replaced_count = _RAG_EMBEDDER["delete_document"](effective_doc_id)
@@ -659,6 +676,9 @@ async def upload_pdf(
                 "status": "indexed", "filename": filename, "doc_id": effective_doc_id,
                 "chunks_extracted": len(chunks), "chunks_stored": stored_count,
                 "stale_chunks_replaced": replaced_count,
+                "document_domain": classification.document_domain,
+                "standard_name": classification.standard_name,
+                "standard_version": classification.standard_version,
             })
         except Exception as exc:
             results.append({"status": "failed", "filename": filename or "unknown", "error": str(exc)})
@@ -685,8 +705,17 @@ async def upload_pdf(
 def ingest_pdf_from_path(
     pdf_path: str = Query(..., description="Absolute or relative path to an existing PDF file"),
     doc_id: Optional[str] = Query(None, description="Document ID prefix for chunk IDs (defaults to filename stem)"),
+    document_domain: Optional[str] = Query(None, description="regulation, sustainability, leed, or standard"),
+    standard_name: Optional[str] = Query(None),
+    standard_version: Optional[str] = Query(None),
 ):
     _ensure_rag()
+
+    from rag.document_metadata import classify_document
+    try:
+        classification = classify_document(document_domain, standard_name, standard_version)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     if not os.path.exists(pdf_path):
         raise HTTPException(404, f"PDF file not found: {pdf_path}")
@@ -698,7 +727,12 @@ def ingest_pdf_from_path(
         doc_id = Path(pdf_path).stem
 
     try:
-        chunks = _RAG_CHUNKER(pdf_path, doc_id=doc_id, source=Path(pdf_path).name)
+        chunks = _RAG_CHUNKER(
+            pdf_path, doc_id=doc_id, source=Path(pdf_path).name,
+            document_domain=classification.document_domain,
+            standard_name=classification.standard_name,
+            standard_version=classification.standard_version,
+        )
         if not chunks:
             raise HTTPException(400, "No text could be extracted from the PDF.")
 
@@ -712,6 +746,9 @@ def ingest_pdf_from_path(
             "chunks_extracted": len(chunks),
             "chunks_stored": stored_count,
             "stale_chunks_replaced": replaced_count,
+            "document_domain": classification.document_domain,
+            "standard_name": classification.standard_name,
+            "standard_version": classification.standard_version,
             "chroma_dir": _RAG_EMBEDDER["CHROMA_DIR"],
             "collection": _RAG_EMBEDDER["COLLECTION_NAME"],
         }
@@ -773,6 +810,8 @@ def ask(req: QuestionRequest):
             req.question,
             conversation_id=req.conversation_id,
             use_strong_models=req.use_strong_models,
+            project_id=req.project_id,
+            file_ids=req.file_ids,
         )
     except Exception as exc:
         raise HTTPException(500, f"RAG pipeline error: {exc}")

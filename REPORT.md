@@ -1,25 +1,36 @@
 # BIM-Intellect v2 — Integrated Project Report
 
-**Report date:** 2026-08-28
+**Report date:** 2026-09-05
 
-**Target branch:** `fix/rag-grounded-api`
+**Audit scope:** current integrated working tree, including the implemented Sustainability phases
 
-**UI source integrated:** `origin/feature/ui-ux` at `0d4aff7` (`fix: hidden sidebars`)
-
-**Verification:** 84 tests passed, 3 skipped; Python and JavaScript syntax checks passed; frontend smoke test passed; Docker Compose configuration validated.
+**Verification:** 122 tests passed, 1 skipped; focused sustainability tests, Python and JavaScript syntax checks, frontend/OpenAPI smoke checks, carbon-factor schema loading, Docker Compose validation, and a live local Neo4j sustainability run completed.
 
 ## 1. Executive summary
 
-BIM-Intellect v2 is a bilingual BIM analysis and grounded question-answering application. It combines four systems:
+BIM-Intellect v2 is a bilingual BIM analysis and grounded question-answering application. It combines five evidence/analysis systems:
 
 1. IFC parsing and filtered, multi-model federation with IfcOpenShell;
 2. a provenance-aware Neo4j building graph;
 3. deterministic AABB clash and clearance analysis, optionally enriched by an unsupervised graph anomaly model;
-4. regulation RAG over a multilingual ChromaDB corpus, combined with schema-aware graph retrieval.
+4. deterministic IFC material/quantity extraction and embodied-carbon estimation from governed carbon factors;
+5. regulation and sustainability/LEED RAG over a multilingual ChromaDB corpus, combined with graph and deterministic sustainability retrieval.
 
-The latest `feature/ui-ux` work has been adopted into the current RAG/graph branch. The delivered interface is a responsive English/Persian workspace with overlay navigation and context drawers, chat, IFC pipeline, results, and document-corpus views. Existing graph query planning, grounded citation handling, multi-file uploads, text-direction support, project-scoped ingestion, and clash logic remain connected.
+The delivered interface is a responsive English/Persian workspace with overlay navigation and context drawers plus Chat, Pipeline, Results, Sustainability, and Documents views. Existing graph query planning, grounded citation handling, multi-file uploads, text-direction support, project-scoped ingestion, clash logic, and anomaly behavior remain connected.
 
 The deterministic clash engine is the authoritative issue detector. The graph anomaly model is a separate triage signal; it does not create, remove, or reclassify clashes.
+
+Embodied-carbon arithmetic is deterministic Python code. The LLM may explain stored results but cannot supply factors, quantities, or calculated kgCO2e. LEED output is a conservative, document-grounded assessment of available evidence; no certification level or general credit score is implemented.
+
+### Changes in the current implementation
+
+- Added project/file-scoped sustainability analysis over graph-retained IFC elements and registered source models.
+- Added raw-preserving material extraction, explicit and optional derived quantity evidence, SI normalization, deterministic alias matching, dimension-safe carbon calculation, and additive Neo4j persistence.
+- Added classified `regulation`, `sustainability`, `leed`, and `standard` document metadata to the existing RAG collection without breaking legacy regulation chunks.
+- Added sustainability-only and sustainability + LEED hybrid orchestration, citation validation, numeric grounding, and conservative assessment states.
+- Added the fifth Sustainability workspace view, exact-scope state protection, data-quality presentation, and session-scoped LEED-oriented findings.
+- Added `sustainability-report-v1` JSON, CSV, and printable HTML exports.
+- Expanded regression coverage and live Neo4j verification while preserving existing clash, anomaly, graph-QA, RAG, multi-file, and frontend behavior.
 
 ## 2. System architecture
 
@@ -33,15 +44,25 @@ flowchart LR
     Neo4j --> Clash[AABB clash/clearance engine]
     Clash --> Neo4j
     Neo4j --> GraphRAG[Templates + query planner + safe Cypher]
-    PDF[Regulation PDFs] --> Chunk[Clause-aware chunker]
+    IFC --> Carbon[Sustainability engine]
+    Neo4j --> Carbon
+    Factors[Versioned carbon-factor CSV] --> Carbon
+    Carbon --> Neo4j
+    PDF[Regulation / LEED PDFs] --> Chunk[Clause-aware chunker + domain metadata]
     Chunk --> Chroma[(ChromaDB)]
-    Chroma --> VectorRAG[Multi-query retrieval + reranking]
+    Chroma --> VectorRAG[Filtered multi-query retrieval + reranking]
     GraphRAG --> Orchestrator[Grounded RAG orchestrator]
     VectorRAG --> Orchestrator
+    Neo4j --> SustRAG[Deterministic sustainability retrieval]
+    SustRAG --> Orchestrator
     Orchestrator --> LLM[OpenRouter models]
     LLM --> API
+    API --> Dashboard[Sustainability dashboard]
+    API --> Reports[JSON / CSV / HTML reports]
     Anomaly[Optional GCN autoencoder] --> Clash
 ```
+
+The implementation keeps evidence classes separate until orchestration: LEED/standards remain document chunks in ChromaDB; BIM facts and calculated sustainability results remain structured Neo4j data. Carbon values are calculated before the LLM is involved.
 
 ### Runtime components
 
@@ -53,6 +74,8 @@ flowchart LR
 | Vector store | ChromaDB | Persistent multilingual regulation chunks |
 | Embeddings/ranking | Sentence Transformers, scikit-learn | Dense embeddings, lexical/hybrid reranking |
 | LLM access | OpenAI-compatible client through OpenRouter | Query understanding, novel Cypher, grounded answer generation |
+| Sustainability | Deterministic Python modules | IFC evidence, SI units, factor lookup, carbon calculation, aggregation |
+| Reports | Python JSON/CSV/HTML renderers | Reproducible exact-scope sustainability exports |
 | Data/ML | pandas, NumPy, PyTorch | CSV handling, clash data, graph anomaly training/inference |
 | Frontend | HTML, CSS, vanilla JavaScript | Responsive bilingual single-page workspace |
 
@@ -61,16 +84,21 @@ flowchart LR
 | Path | Purpose |
 |---|---|
 | `main.py` | FastAPI application, CORS, static/template serving, safe validation-error response |
-| `api/routes.py` | IFC, graph, clash, RAG, chat, filter, and health API |
+| `api/routes.py` | IFC, graph, clash, RAG, chat, filter, health, and sustainability-router mounting |
+| `api/sustainability_routes.py` | Project/file-scoped sustainability analysis, read, finding, and report APIs |
 | `extract_graph.py` | IFC hierarchy/semantic extraction and AABB generation |
 | `extract_sotreys_type.py` | Fast IFC storey/type scanning for UI filters (filename retains the historical typo) |
 | `bim_graph/` | Neo4j loader/client, project registry, coordinate validation, clash pipeline, graph retrieval |
+| `bim_graph/pipeline_lock.py` | Shared process-local serialization for graph/sustainability mutations |
 | `bim_graph/anomaly/` | Graph dataset, features, sparse GCN autoencoder, training and inference |
 | `rag/` | PDF chunking, indexing, Chroma access, retrieval, reranking, memory, prompts, orchestration |
+| `sustainability/` | Material/quantity extraction, normalization, factors, calculation, persistence, retrieval, assessment, reports |
+| `dataset/sustainability/` | Header-only factor template, JSON schema, and operator guidance |
 | `templates/index.html` | Integrated application shell and accessible controls |
 | `static/style.css` | Responsive logical-property styling for LTR/RTL layouts |
 | `static/i18n.js` | English/Persian translation and document direction controller |
 | `static/app.js` | UI state, uploads, ingestion, chat, results, filters and drawers |
+| `static/sustainability.js` | Exact-scope sustainability dashboard state, rendering, and report downloads |
 | `tests/` | RAG, graph planning, federation, clash/anomaly, and workflow regression tests |
 | `docs/` | Detailed subsystem documents |
 | `Dockerfile`, `docker-compose.client.yml` | Full application + Neo4j client deployment |
@@ -79,11 +107,11 @@ flowchart LR
 
 ## 4. Integrated UI/UX
 
-The UI branch introduced a new workspace shell without changing backend contracts.
+The current workspace shell extends the existing backend contracts without replacing the established workflows.
 
 ### Navigation and layout
 
-- Overlay sidebar navigation for Chat, Pipeline, Results, and Documents.
+- Overlay sidebar navigation for Chat, Pipeline, Results, Sustainability, and Documents.
 - Secondary context drawer for chat retrieval details.
 - Scrim, close buttons, `Escape` behavior, and responsive hidden sidebars.
 - Logical CSS properties allow the complete layout to mirror under RTL.
@@ -102,7 +130,8 @@ The UI branch introduced a new workspace shell without changing backend contract
 - **Chat:** hybrid vector/graph questions, example prompts, stronger-model option, cited sources, retrieval diagnostics, and conversation ID continuity.
 - **Pipeline:** multi-IFC drag/drop, project ID, registered-model selection, storey/type multiselects, reset option, import/analyse action, and activity log.
 - **Results:** All Issues, Clashes, and Clearances; storey/type filters; project-aware output; cross-file and anomaly fields.
-- **Documents:** multi-PDF ingestion, optional document ID for a single file, indexed-document status, and collection clearing.
+- **Sustainability:** selected/all-project-model analysis, carbon coverage and breakdowns, contributors, data quality, exact-scope LEED findings, and JSON/CSV/HTML downloads.
+- **Documents:** multi-PDF ingestion, optional document ID for a single file, document-domain/standard/version fields, indexed-document status, and collection clearing.
 
 ### Compatibility preserved during integration
 
@@ -111,6 +140,7 @@ The UI branch introduced a new workspace shell without changing backend contract
 - API validation errors are converted to a stable JSON-safe shape.
 - Structured FastAPI/Pydantic errors are rendered into readable UI text.
 - Current graph source/citation rendering and Persian/English chat direction were retained.
+- Sustainability responses are cleared and scope-checked when project/file selection changes; stale asynchronous responses cannot overwrite the active scope.
 
 ## 5. IFC project and graph ingestion
 
@@ -322,11 +352,13 @@ loss = alpha * feature reconstruction MSE
 
 Defaults are 100 epochs, hidden dimension 64, latent dimension 16, dropout 0.1, `alpha=0.7`, `beta=0.3`, seed 42, and a 99th-percentile training-score triage threshold. This threshold is not supervised accuracy. The checked-in documentation records a two-building, 12,311-node training artifact; no precision/recall claim is valid because the repository contains no anomaly ground-truth labels.
 
-## 8. Regulation RAG and hybrid graph QA
+## 8. Regulation RAG, graph QA, and sustainability reasoning
 
 ### Document ingestion
 
 PDFs are normalized and parsed page by page. The chunker detects Persian/English clause structure, canonicalizes Persian/Arabic digits, excludes table-of-contents fragments where possible, stores section links, and retains source, document, clause, page, section, content hash, and neighbor metadata. Indexing uses Chroma upsert semantics so rebuilding known IDs is idempotent.
+
+New chunks also retain `document_domain`, `standard_name`, and `standard_version`. Domains are validated as `regulation`, `sustainability`, `leed`, or `standard`; LEED and generic standard documents require versions, and generic standards also require a name. Legacy chunks without domain metadata continue to behave as ordinary regulations.
 
 ### Retrieval
 
@@ -339,6 +371,8 @@ The current retrieval path provides:
 5. one bounded lexical fallback when semantic relevance is weak;
 6. neighboring-chunk expansion, or complete-section expansion for completeness requests;
 7. deduplicated, size-bounded context assembly.
+
+When the planner requests sustainability/LEED documents, the domain filter is applied to dense candidates, lexical fallback, reranking, and expanded neighbors/sections. The current design deliberately reuses the existing `regulations_v2` collection; it does not create a second sustainability vector store.
 
 Conversation memory is in process, bounded by count and TTL, and is not a durable multi-worker session database.
 
@@ -354,11 +388,58 @@ Queries are safety-checked and validated with Neo4j `EXPLAIN`. Planned queries c
 
 ### Grounding and citations
 
-The orchestrator routes a question to regulation evidence, graph evidence, both, or conversational handling. Explicit graph schema signals override accidental vector-only routing. Final regulatory claims must cite a retrieved clause/page pair. Persian digits are normalized during citation validation. Unsupported or malformed citations cause repair or a fail-closed insufficient-evidence response. Returned `sources` include only evidence actually used by the answer.
+The orchestrator routes independently to document, graph, and deterministic sustainability evidence, allowing single-source and grounded combined paths. Routing uses the existing semantic planner with bilingual safety signals rather than a keyword-only switch. Explicit graph schema signals still override accidental vector-only routing.
+
+Final documentary claims must cite a retrieved clause/page pair or a validated document/section/page reference. Persian digits are normalized during citation validation. Unsupported or malformed citations cause repair or a fail-closed insufficient-evidence response. Numeric project-sustainability claims must occur in deterministic sustainability context; invented carbon totals are rejected and replaced with evidence-only output. Returned `sources` include only evidence actually used by the answer.
 
 Standard and stronger model profiles are configured independently. The strong option changes query-understanding and final-answer models; it does not weaken grounding requirements.
 
-## 9. API inventory
+Conservative LEED-oriented statuses are `satisfied_from_available_evidence`, `not_satisfied_from_available_evidence`, `insufficient_evidence`, and `not_automatically_evaluable`. Positive or negative outcomes require a named deterministic evaluator. No general evaluator registry is populated in the current release, so having both evidence sources normally produces `not_automatically_evaluable`, not a compliance or certification claim.
+
+## 9. Sustainability and embodied-carbon implementation
+
+### Material extraction
+
+`sustainability/ifc_extractor.py` reopens each registered source IFC after resolving the retained semantic elements from Neo4j. It follows `IfcRelAssociatesMaterial` at occurrence level and falls back to the IFC type only when occurrence associations yield no usable material. It flattens direct materials, material layers/layer sets/layer-set usage, profiles/profile sets/profile-set usage, constituents/constituent sets, and legacy material lists.
+
+Every use preserves the IFC-authored name. A separate normalized key and broad deterministic category support lookup; the original value is never overwritten. Occurrence assignments take precedence over inherited type assignments.
+
+### Quantity evidence and units
+
+Explicit occurrence/type `IfcElementQuantity` definitions support `IfcQuantityVolume`, `IfcQuantityArea`, `IfcQuantityLength`, and `IfcQuantityWeight`, including nested complex quantities. Raw value, raw unit, normalized value/unit, quantity/set name, association level, and errors are retained.
+
+Known quantities normalize to SI bases: kg, m3, m2, and m. A generous AABB plausibility guard can exclude gross project/local unit inconsistencies without rewriting the authored quantity. When `allow_geometry_derived=true`, a limited IFC-type allowlist may receive envelope volume, maximum-face area, or maximum-extent length only when that dimension has no explicit value. These records are `geometry_derived`, retain their method, and have low quality. The safe API/UI default is false.
+
+### Factors, matching, and calculation
+
+The factor repository is a validated CSV configured through `SUSTAINABILITY_CARBON_FACTORS`. Required provenance includes factor/material IDs, aliases, category, value/unit, region, source/version, year, dataset version, notes, and enabled state. Supported units are `kgCO2e/kg`, `kgCO2e/m3`, and `kgCO2e/m2`. Matching uses normalized names and explicitly reviewed pipe-separated aliases and returns `matched`, `ambiguous`, or `unmatched`; no LLM matching participates in calculation.
+
+For a uniquely matched factor, the engine selects the best compatible explicit quantity before any derived evidence. Tied top-ranked quantities with different values become ambiguous. Single materials receive the whole quantity. Multi-layer volume may use a layer-thickness ratio, and constituents may use authored fractions; both allocations are estimates. Unsupported multi-material allocation fails closed.
+
+```text
+estimated embodied carbon (kgCO2e)
+    = allocated normalized quantity × compatible factor value
+```
+
+The multiplication uses decimal representations and is refused for incompatible dimensions. Results preserve the element ID/GUID/type/name, project/model/file/discipline, raw and normalized material/quantity evidence, quantity source, allocation, factor record and dataset hash, kgCO2e, calculation status, and methodology version. Unknown/unmatched/excluded rows are not treated as zero.
+
+The checked-in `dataset/sustainability/carbon_factors.csv` is intentionally header-only. Therefore the software and quality reporting are usable out of the box, but meaningful carbon totals require an operator-supplied reviewed dataset. The repository makes no environmental-accuracy claim beyond that dataset.
+
+### Persistence and aggregation
+
+The implementation adds `SustainabilityRun`, `SustainabilityResult`, `MaterialUse`, `Material`, `QuantityEvidence`, and `CarbonFactor` nodes and links them to existing project, model, and element nodes. Existing `Element` properties and clash/anomaly relationships are not rewritten. Runs are exact project/file scopes; a rerun makes the prior current run for that scope historical and retains reproducible factor/methodology identity.
+
+Summaries aggregate by project, source IFC file, discipline, IFC type, normalized material, and element. Coverage and status counts include calculated elements, non-calculated elements, explicit/estimated quantities, missing materials/quantities, unmatched or ambiguous materials, ambiguous quantities, and unit incompatibility.
+
+### Dashboard, findings, and reports
+
+The Sustainability view renders backend results only; JavaScript does no carbon arithmetic. It supports selected-file or all-ingested-file scope, six summary indicators, four breakdown dimensions, top contributors, and quality details. It handles loading, success, partial, empty, and backend-error states and rejects stale/mismatched project responses.
+
+Grounded hybrid assessment answers may be copied into a bounded in-process finding ledger. Findings are keyed by conversation, project, and sorted file set and retain citations and missing-project-data categories. They are explanatory session data, not durable assessment or certification records.
+
+`sustainability-report-v1` is assembled from persisted results without recalculation. JSON contains the full canonical structure, including item-level quality rows. CSV contains metadata, selected models, summary/breakdowns, top contributors, used factors, quality counts, LEED-oriented findings/citations, and limitations. Printable HTML contains summary/breakdowns, top contributors, quality counts, findings, and limitations. CSV and HTML do not currently contain the complete quality-item list.
+
+## 10. API inventory
 
 All application endpoints are mounted under `/api`; `/` serves the UI.
 
@@ -381,7 +462,14 @@ All application endpoints are mounted under `/api`; `/` serves the UI.
 | POST | `/rag/ingest` | Legacy server-path PDF ingestion |
 | GET | `/rag/status` | Collection count and indexed-document inventory |
 | DELETE | `/rag/clear` | Delete/recreate the regulation collection |
-| POST | `/ask` | Routed, grounded vector + graph conversation |
+| POST | `/sustainability/analyze` | Run exact project/file-scoped deterministic analysis |
+| GET | `/sustainability/summary` | Read a current or specified exact-scope run summary |
+| GET | `/sustainability/materials` | Read material/result aggregates |
+| GET | `/sustainability/elements` | Read paginated/filterable result rows |
+| GET | `/sustainability/factors` | Inspect validated factor rows and dataset status |
+| GET | `/sustainability/assessment-findings` | Read exact-scope findings from one conversation session |
+| GET | `/sustainability/report` | Download JSON, CSV, or HTML for a persisted run |
+| POST | `/ask` | Routed, grounded document + graph + sustainability conversation |
 | DELETE | `/rag/conversations/{conversation_id}` | Clear one in-memory conversation |
 | POST | `/ask-vector` | Legacy vector-only answer path |
 | POST | `/ask-graph` | Graph-only retrieval/debug path |
@@ -389,7 +477,11 @@ All application endpoints are mounted under `/api`; `/` serves the UI.
 
 The OpenAPI schema documents both plural batch and legacy scalar multipart fields.
 
-## 10. Configuration
+`/rag/upload` and `/rag/ingest` accept `document_domain`, `standard_name`, and `standard_version` query parameters. Existing callers default to `regulation`; LEED and standard classification validation applies before chunking.
+
+Sustainability analysis accepts `project_id`, optional `file_ids`, optional factor dataset version/region, and `allow_geometry_derived` (default false). Sustainability read/report routes use repeated `file_id` query values and optional `run_id`; omitting file IDs means all currently ingested models in that project, not a global scope. Chat accepts optional `project_id` and `file_ids` so deterministic evidence remains project-safe.
+
+## 11. Configuration
 
 Important environment variables include:
 
@@ -401,18 +493,24 @@ Important environment variables include:
 | Chroma | `CHROMA_PERSIST_DIR`, collection and embedding model settings |
 | Retrieval | candidate/rerank counts, context limit, weights, reranker provider/device |
 | Memory | recent-message limit, summary size, conversation cap and TTL |
+| Sustainability | `SUSTAINABILITY_CARBON_FACTORS`, `SUSTAINABILITY_BATCH_SIZE` |
 
 `.env` is ignored by Git and excluded from Docker build context. Secrets are injected by Compose through `env_file`; they must never be copied into documentation or commits.
 
-## 11. Deployment and operation
+## 12. Deployment and operation
 
 ### Local development
 
 ```powershell
+Copy-Item .env.example .env
+# Configure OPENROUTER_API_KEY and database settings.
 docker compose -f docker-compose.yml up -d
 python -m pip install -r requirements.txt
+python -m rag.indexer --source-dir dataset/sources --rebuild
 python -m uvicorn main:app --reload
 ```
+
+Neo4j Browser uses HTTP port 7474; application database traffic uses Bolt port 7687. The bundled carbon-factor CSV is not populated, so a reviewed dataset must be installed before expecting carbon calculations.
 
 ### Full client deployment
 
@@ -426,23 +524,25 @@ The client composition builds the FastAPI image, starts Neo4j with APOC, waits f
 
 The conventional `.dockerignore` now excludes Git/IDE state, virtual environments, caches, runtime Chroma/artifacts, archives, and `.env` from the application image.
 
-## 12. Verification performed on the integrated tree
+## 13. Verification performed on the integrated tree
 
 | Check | Result |
 |---|---|
-| Fetch latest `origin/feature/ui-ux` | `0d4aff7` fetched and merged |
-| Merge conflict audit | `.gitignore`, HTML, CSS, and JavaScript reconciled; no markers remain |
-| Python compilation | Passed for API, graph, RAG, and entry modules |
-| JavaScript syntax | `static/app.js` and `static/i18n.js` passed `node --check` |
-| Test suite | **84 passed, 3 skipped**, 1 third-party deprecation warning |
+| Python compilation | Passed for `api`, `bim_graph`, `rag`, `sustainability`, and entry/extractor modules |
+| JavaScript syntax | `static/app.js`, `static/i18n.js`, and `static/sustainability.js` passed `node --check` |
+| Focused sustainability tests | **36 passed**, 1 dependency deprecation warning |
+| Full test suite | **122 passed, 1 skipped** in 50.60 seconds; 3 deprecation warnings |
 | Frontend smoke test | `GET /` returned 200 and rendered the integrated page |
-| OpenAPI generation | Passed; 24 paths including `/` were generated |
+| OpenAPI generation | Passed and includes all seven sustainability routes |
 | Docker Compose config | `docker-compose.client.yml` validated |
-| Health smoke test | Chroma reachable; Neo4j unavailable locally, so `/api/health` correctly returned 503 |
+| Factor schema | `carbon_factors.schema.json` parsed successfully |
+| Live Neo4j sustainability run | Completed through Bolt 7687; persisted results and summary/elements/report APIs returned HTTP 200 |
 
 The normal pytest invocation on this workstation was initially intercepted by an incompatible globally installed Hydra/OmegaConf plugin. Running with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` isolated project tests and produced the result above.
 
-## 13. Operational and security considerations
+The live run reused the registered `210_King_Merged.ifc` project model. Run `59a28482-e312-44c1-b251-34df65832614` persisted 10,773 evidence/result rows linked to 9,533 distinct retained elements with exact project/file provenance. It calculated no carbon because the configured factor CSV is the deliberate empty template; this is an unavailable total, not evidence of zero impact. The local Chroma corpus contained no classified LEED document, so no live LEED assessment was fabricated. Domain isolation, citation behavior, hybrid combination, missing-evidence states, and numeric grounding were validated with controlled tests.
+
+## 14. Operational and security considerations
 
 These are current implementation constraints, not completed features:
 
@@ -450,30 +550,41 @@ These are current implementation constraints, not completed features:
 - CORS is wildcard-based. Production should use an explicit trusted-origin list and an authentication scheme.
 - Neo4j development credentials are defaults and APOC is unrestricted in Compose; replace credentials and restrict procedures for production.
 - Legacy path-based IFC/PDF routes assume a trusted operator and should be disabled or sandboxed in a multi-user deployment.
-- Extraction, graph load, clash detection, and PDF embedding run in request handlers. Large jobs need a queue, progress API, cancellation, and timeouts.
+- Extraction, graph load, clash detection, PDF embedding, sustainability analysis, and report assembly run in request handlers. Large jobs need a queue, progress API, cancellation, and timeouts.
 - Some list/filter handlers catch Neo4j failures and return empty lists with an error field, which clients must not interpret as proof that there are no issues.
 - Each graph request creates a new Neo4j driver instead of sharing an application-level connection pool.
-- Chroma, the project JSON registry, temporary CSVs, and conversation memory are local-process/local-filesystem state; multi-instance deployment requires shared durable services and concurrency design.
+- Chroma, the project JSON registry, temporary CSVs, conversation memory, and LEED-oriented finding ledger are local-process/local-filesystem state; multi-instance deployment requires shared durable services and concurrency design.
 - Uploaded file size/count limits, quotas, malware scanning, rate limiting, and audit logging are not implemented.
 - Checked-in model artifacts increase repository/image-mount size and need an explicit artifact/versioning policy.
+- The checked-in carbon-factor file is an empty non-authoritative template. Dataset sourcing, licensing, lifecycle boundaries, regional selection, review, and updates remain operator responsibilities.
+- Geometry-derived quantities are optional low-quality AABB estimates, not quantity take-offs. Explicit but grossly implausible values are retained as evidence and excluded from calculation.
+- The system has no general LEED criterion evaluator, credit roll-up, or certification engine. Findings are session-scoped and require retrieved citations.
+- JSON is the only report format that currently includes the full item-level data-quality list; CSV and HTML provide quality counts.
 
-## 14. Recommended next work
+## 15. Recommended next work
 
-1. Normalize clash geometry/threshold to declared physical units and add per-discipline tolerance profiles.
-2. Add exact geometry confirmation after AABB broad phase and return clash points/volumes for viewers.
-3. Add authentication, role checks, restricted CORS/APOC, rate limits, and upload limits.
-4. Move extraction, ingestion, embedding, and analysis to durable background jobs.
-5. Add project-scoped authorization and database/vector tenancy.
-6. Share the Neo4j driver and replace swallowed infrastructure errors with explicit service responses.
-7. Add browser-level accessibility and responsive visual regression tests for both languages.
-8. Add reviewed clash/anomaly labels before making any ML accuracy claim.
+1. Source, license, review, and version an authoritative regional carbon-factor dataset with explicit lifecycle boundaries.
+2. Validate material aliases and IFC quantity behavior against a controlled multi-discipline reference corpus with known take-offs.
+3. Add reviewed requirement-specific LEED evaluators before allowing positive/negative automated assessment states; do not add certification claims.
+4. Persist assessment history and generated report artifacts in durable project-scoped storage.
+5. Move extraction, ingestion, embedding, clash/sustainability analysis, and large reports to background jobs with progress, cancellation, retry, and timeouts.
+6. Normalize clash geometry/threshold to declared physical units and add exact geometry confirmation after the AABB broad phase.
+7. Add authentication, project tenancy, role checks, restricted CORS/APOC, rate limits, upload limits, and audit logging.
+8. Share the Neo4j driver and replace swallowed infrastructure errors with explicit service responses.
+9. Add browser-level bilingual accessibility and responsive visual regression tests.
+10. Add reviewed clash/anomaly labels before making any ML accuracy claim.
 
-## 15. Related technical documents
+## 16. Related technical documents
 
 - `docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md`
 - `docs/MULTI_FILE_WORKFLOWS.md`
 - `docs/RAG_ARCHITECTURE.md`
 - `docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md`
+- `docs/SUSTAINABILITY_CARBON_ANALYSIS.md`
+- `docs/SUSTAINABILITY_LEED_RAG.md`
+- `docs/SUSTAINABILITY_REPORTING_UI.md`
+- `docs/SUSTAINABILITY_IMPLEMENTATION_PLAN.md`
 - `BIM-Intellect-Documentation.md`
+- `README.md`
 
 This report is the integrated project-level overview. The subsystem documents contain deeper command examples, schemas, training details, and regression rationale.
