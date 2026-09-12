@@ -38,9 +38,8 @@ This version merges two prior iterations:
 Other robustness properties kept from the previous version:
 - Chunks are NEVER silently dropped just because no clause ID has been
   detected yet - they are kept with clause_id=None instead of being
-  discarded. Unlabeled chunks still can't be *cited* (retriever.py /
-  orchestrator.py both refuse to cite clause_id="unknown"), but the text
-  is preserved and stays searchable/embeddable rather than disappearing.
+  discarded. Unlabeled chunks can use the validated document/section/page
+  citation form; the text remains searchable and embeddable.
 - CLAUSE_PATTERN-equivalent matching handles dot separators ("15.1.2")
   and Persian/Arabic-Indic digits ("۱۵-۱-۲"); digits are normalized
   before matching so mixed digit scripts don't break detection.
@@ -77,6 +76,8 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
+from .document_metadata import classify_document
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +102,9 @@ class Chunk:
     source: str = ""
     document_id: str = ""
     document_title: str = ""
+    document_domain: str = "regulation"
+    standard_name: str = ""
+    standard_version: str = ""
     chapter: str = ""
     section_id: str = ""
     heading: str = ""
@@ -184,15 +188,15 @@ class ChunkResult:
         elif not self.pages_with_clause_match:
             lines.append(
                 "-> Text was extracted but no clause numbers were detected anywhere "
-                "in this document. Every chunk will have clause_id=None and won't be "
-                "citable. This document may not use a dash/dot numeric clause scheme "
+                "in this document. Every chunk will have clause_id=None and will use "
+                "document/section/page citations. This document may not use a dash/dot numeric clause scheme "
                 "at all (e.g. 'Article 4' or lettered sections instead)."
             )
         elif self.unlabeled_chunk_count:
             lines.append(
                 f"-> {self.unlabeled_chunk_count} chunk(s) have no clause_id (usually "
                 f"front matter/intro text before the first numbered clause on a page). "
-                f"These are kept and searchable but won't be cited in answers."
+                f"These are kept, searchable, and cited by document/section/page."
             )
         return "\n".join(lines)
 
@@ -624,6 +628,9 @@ def chunk_pdf(
     source: str | None = None,
     chunk_size: int = 1200,
     overlap: int = 0,
+    document_domain: str = "regulation",
+    standard_name: str = "",
+    standard_version: str = "",
 ) -> list[Chunk]:
     """Backwards-compatible entry point: returns just the chunk list.
 
@@ -636,6 +643,9 @@ def chunk_pdf(
         source=source,
         chunk_size=chunk_size,
         overlap=overlap,
+        document_domain=document_domain,
+        standard_name=standard_name,
+        standard_version=standard_version,
     ).chunks
 
 
@@ -648,6 +658,9 @@ def chunk_pdf_with_diagnostics(
     overlap: int = 0,
     skip_appendix: bool = True,
     min_page: int = 1,
+    document_domain: str = "regulation",
+    standard_name: str = "",
+    standard_version: str = "",
 ) -> ChunkResult:
     """
     Extract, detect the clause root (unless `chapter_id` is given to
@@ -655,6 +668,7 @@ def chunk_pdf_with_diagnostics(
     each clause segment by character count.
     """
     source = source or doc_id
+    classification = classify_document(document_domain, standard_name, standard_version)
 
     pages = extract_text_by_page(pdf_path)
 
@@ -729,6 +743,9 @@ def chunk_pdf_with_diagnostics(
                     source=source,
                     document_id=doc_id,
                     document_title=source,
+                    document_domain=classification.document_domain,
+                    standard_name=classification.standard_name,
+                    standard_version=classification.standard_version,
                     chapter=(cid.split("-")[0] if cid else (root or "")),
                     section_id=section_id,
                     heading=heading,

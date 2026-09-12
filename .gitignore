@@ -9,6 +9,7 @@ venv/
 
 # Notebooks
 .notebooks/
+.pdfs/
 
 # Tests - ignore all except selected tests
 tests/
@@ -23,6 +24,9 @@ tests/*
 !tests/test_visualization_scope.py
 !tests/test_model_scene_api.py
 !tests/test_answer_visualization.py
+!tests/test_sustainability_phase1.py
+!tests/test_sustainability_leed_rag.py
+!tests/test_sustainability_phase3.py
 
 # Environment variables
 .env

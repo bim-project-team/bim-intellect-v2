@@ -1,6 +1,6 @@
 # BIM-Intellect v2
 
-> Bilingual BIM intelligence for IFC federation, graph analysis, clash detection, and citation-grounded regulatory question answering.
+> Bilingual BIM intelligence for IFC federation, graph analysis, clash detection, deterministic embodied-carbon estimation, and citation-grounded regulatory/LEED question answering.
 
 BIM-Intellect combines IFC geometry, a Neo4j building graph, a multilingual regulation index, and grounded language models in one English/Persian web application. Teams can upload multiple discipline models, verify that their coordinate systems are safe to federate, detect intra-file and cross-file issues, and ask questions that use building data, regulation evidence, or both.
 
@@ -13,6 +13,10 @@ BIM-Intellect combines IFC geometry, a Neo4j building graph, a multilingual regu
 - Deterministic AABB clash and clearance detection with cross-file issue tracking
 - Optional sparse-GCN graph anomaly scoring kept separate from authoritative clash rules
 - Versioned multilingual regulation RAG using local Sentence Transformer embeddings and ChromaDB
+- Project/file-scoped IFC material, quantity, and deterministic embodied-carbon analysis with explicit factor provenance
+- Classified LEED/sustainability document retrieval and grounded hybrid reasoning over deterministic carbon evidence
+- Project-safe Sustainability dashboard with bilingual KPIs, breakdowns, contributors, exclusions, and session-grounded LEED findings
+- Downloadable `sustainability-report-v1` JSON, audit CSV, and printable HTML reports
 - Multi-query retrieval, hybrid/cross-encoder reranking, section expansion, and lexical fallback
 - Schema-aware graph query planning with parameterized Cypher and result-completeness checks
 - Storey-partitioned glTF export and a 3D map that highlights the elements an answer identified
@@ -24,18 +28,18 @@ BIM-Intellect combines IFC geometry, a Neo4j building graph, a multilingual regu
 
 ## Current verification
 
-The integrated `fix/rag-grounded-api` tree was verified with:
+The current integrated tree was verified with:
 
 | Check | Result |
 |---|---|
-| Project tests | **84 passed, 3 skipped** |
+| Project tests | **194 passed, 3 skipped** (2 failures reproduce on both parent branches: git-lfs PDF fixtures unavailable) |
 | Python compilation | Passed |
 | Frontend JavaScript syntax | Passed |
 | Frontend smoke request | `GET /` returned 200 |
 | OpenAPI generation | Passed |
 | Full Compose configuration | Validated |
 
-The skipped tests depend on optional/environment-specific integrations. See [Testing](#testing) for the exact commands.
+The skipped test depends on an optional/environment-specific integration. The full suite completed in 50.60 seconds on the recorded verification workstation. See [Testing](#testing) for the exact commands.
 
 ## Architecture
 
@@ -52,6 +56,11 @@ flowchart LR
     Clash --> Neo4j
     Anomaly[Optional GCN anomaly model] --> Clash
 
+    IFC --> Carbon[Sustainability engine]
+    Neo4j --> Carbon
+    Factors[Versioned carbon factors] --> Carbon
+    Carbon --> Neo4j
+
     PDFs[Regulation PDFs] --> Chunker[Clause-aware chunker]
     Chunker --> Chroma[(ChromaDB regulations_v2)]
     Chroma --> Vector[Retrieval + reranking]
@@ -59,18 +68,21 @@ flowchart LR
     Neo4j --> GraphQA[Graph templates + planner + Cypher]
     Vector --> RAG[Grounded orchestrator]
     GraphQA --> RAG
+    Neo4j --> Sustainability[Deterministic sustainability evidence]
+    Sustainability --> RAG
     RAG --> Models[OpenRouter language models]
     Models --> API
 ```
 
 ## Interface
 
-The web workspace has four views:
+The web workspace has five views:
 
 - **Chat** routes questions to regulations, the building graph, both sources, or conversation handling. It displays citations, graph elements, model mode, and retrieval diagnostics. When an answer identifies specific BIM elements, a 3D map opens beside it with those elements highlighted in their storey.
 - **Pipeline** uploads and registers multiple IFC files, selects a project/model set and optional storey/type filters, imports the graph, and runs clash analysis.
 - **Results** separates all issues, volumetric clashes, and clearance violations, with graph-derived storey/type filters.
-- **Documents** uploads multiple regulation PDFs, lists what is actually indexed, and manages the configured collection.
+- **Sustainability** analyzes selected or all ingested project models, shows deterministic carbon coverage/breakdowns/contributors/data quality, displays exact-scope grounded LEED findings, and downloads JSON/CSV/HTML reports.
+- **Documents** uploads classified regulation, sustainability, LEED, or standard PDFs, lists what is actually indexed, and manages the configured collection.
 
 English and Persian translations live in `static/i18n.js`. The layout uses CSS logical properties for RTL mirroring, while answers, questions, IFC names, IDs, metrics, and citations preserve the direction appropriate to their content.
 
@@ -115,6 +127,8 @@ python -m rag.indexer --source-dir dataset/sources --rebuild
 python -m uvicorn main:app --reload
 ```
 
+The checked-in `dataset/sustainability/carbon_factors.csv` is intentionally empty apart from its header. Add a reviewed, sourced factor dataset before interpreting embodied-carbon totals. The application can still expose missing-material, unmatched-factor, and quantity-quality results without factor rows.
+
 Open:
 
 - Application: `http://localhost:8000`
@@ -143,12 +157,13 @@ Host `chroma_db`, `dataset`, and `artifacts` directories are mounted for persist
 
 1. Copy `.env.example` to `.env` and configure OpenRouter/Neo4j settings.
 2. Start Neo4j or the complete client composition.
-3. Open **Documents** and upload regulation PDFs, or build the index with `rag.indexer`.
+3. Open **Documents** and upload regulation PDFs, classifying LEED/sustainability/standard documents with their standard name and required version, or build the default regulation index with `rag.indexer`.
 4. Open **Pipeline**, enter a stable project/building ID, and upload one or more IFC files.
 5. Review each file's parsed schema, storeys, types, coordinate metadata, and status.
 6. Select the models and any desired storey/type subset.
 7. Run graph ingestion and clash analysis.
-8. Review **Results** and ask grounded questions in **Chat**.
+8. Open **Sustainability**, run the exact-scope analysis, inspect data quality, and download a report.
+9. Review **Results** and ask grounded graph, regulation, sustainability, or LEED questions in **Chat**.
 
 Multi-model analysis stops with HTTP 409 when compatible coordinate frames cannot be verified. BIM-Intellect does not guess or estimate a transform between unaligned IFC files.
 
@@ -216,7 +231,9 @@ The default regulation index uses:
 - dense candidate retrieval and hybrid or cross-encoder reranking;
 - one bounded lexical fallback for weak semantic recall;
 - neighboring-chunk or complete-section expansion;
-- deduplicated, size-bounded final context.
+- deduplicated, size-bounded final context;
+- backward-compatible document domains (`regulation`, `sustainability`, `leed`, `standard`) and standard name/version metadata;
+- domain-isolated LEED/sustainability retrieval and validated named-section citations.
 
 Build or inspect the index:
 
@@ -225,7 +242,9 @@ python -m rag.indexer --source-dir dataset/sources --rebuild
 python -m rag.indexer --status
 ```
 
-Regulatory claims in final answers must cite a clause/page pair present in retrieved sources. Persian digits are normalized during validation. Unsupported citations trigger repair or a fail-closed insufficient-evidence answer.
+Documentary claims in final answers must cite a retrieved clause/page pair or an exact document/section/page triplet. Persian digits are normalized during validation. Unsupported citations trigger repair or a fail-closed insufficient-evidence answer.
+
+Chat accepts optional `project_id` and `file_ids`. Sustainability questions retrieve the stored deterministic run separately from document RAG; hybrid answers cannot ask the language model to calculate or invent carbon values.
 
 Conversation memory is bounded and in-process. It is not durable across restarts or shared among multiple Uvicorn workers.
 
@@ -261,6 +280,8 @@ Core graph relationships are:
 
 The original IFC GUID remains in `ifcGuid`; file, project, discipline, and coordinate-system provenance are stored separately.
 
+Sustainability uses additive `SustainabilityRun`, `SustainabilityResult`, `MaterialUse`, `Material`, `QuantityEvidence`, and `CarbonFactor` nodes linked to the existing project/model/element graph. It does not place calculated totals on `Element` or alter clash/anomaly relationships.
+
 ## API overview
 
 All backend routes are mounted below `/api`.
@@ -273,6 +294,7 @@ All backend routes are mounted below `/api`.
 | Filters | `GET /filters/dataset`, `GET /filters/storeys`, `GET /filters/types` |
 | 3D model | `GET /model/manifest`, `GET /model/scene/{project_id}/{file_id}/{scene_key}`, `GET /model/elements` |
 | Documents | `POST /rag/upload`, `POST /rag/ingest`, `GET /rag/status`, `DELETE /rag/clear` |
+| Sustainability | `POST /sustainability/analyze`, `GET /sustainability/summary`, `GET /sustainability/materials`, `GET /sustainability/elements`, `GET /sustainability/factors`, `GET /sustainability/assessment-findings`, `GET /sustainability/report` |
 | Questions | `POST /ask`, `POST /ask-vector`, `POST /ask-graph` |
 | Conversation | `DELETE /rag/conversations/{conversation_id}` |
 | Health | `GET /health` |
@@ -300,6 +322,8 @@ api/                         FastAPI routes
 bim_graph/                   Neo4j, federation, clash, graph QA
 bim_graph/anomaly/           GCN dataset, training, and inference
 rag/                         Chunking, indexing, retrieval, memory, grounding
+sustainability/              IFC evidence, units, factors, calculation, Neo4j persistence, reports
+dataset/sustainability/      Carbon-factor CSV template, schema, and operator guidance
 static/                      UI styles, localization, and browser logic
 static/vendor/three/         Vendored three.js for the offline-capable 3D viewer
 templates/                   Application HTML shell
@@ -323,7 +347,9 @@ Start from [.env.example](.env.example). Important groups include:
 - `RAG_EMBEDDING_*`, `RAG_COLLECTION_NAME`, and `CHROMA_PERSIST_DIR`
 - retrieval/reranking counts, limits, models, and weights
 - conversation-memory limits and TTL
-- project storage and registry paths, and `BIM_SCENE_STORAGE_DIR` for generated 3D geometry
+- project storage and registry paths
+- `SUSTAINABILITY_CARBON_FACTORS` and `SUSTAINABILITY_BATCH_SIZE`
+- `BIM_SCENE_STORAGE_DIR` for generated 3D geometry
 
 `.env` is ignored by Git and excluded by `.dockerignore`. Do not commit API keys or production credentials.
 
@@ -341,9 +367,11 @@ Additional checks used for the integrated tree:
 ```powershell
 node --check static/app.js
 node --check static/i18n.js
+node --check static/sustainability.js
 node --input-type=module --check static/viewer.js
-python -m compileall -q api bim_graph rag main.py extract_graph.py extract_sotreys_type.py
+python -m compileall -q api bim_graph rag sustainability main.py extract_graph.py extract_sotreys_type.py
 docker compose -f docker-compose.client.yml config
+python -c "import json, pathlib; json.loads(pathlib.Path('dataset/sustainability/carbon_factors.schema.json').read_text(encoding='utf-8'))"
 ```
 
 `tests/test_scene_export.py` includes one end-to-end IFC-to-glTF export. It skips automatically when no reference IFC file is present.
@@ -351,6 +379,10 @@ docker compose -f docker-compose.client.yml config
 ## Documentation
 
 - [Complete system documentation](BIM-Intellect-Documentation.md)
+- [Sustainability carbon analysis](docs/SUSTAINABILITY_CARBON_ANALYSIS.md)
+- [Sustainability + LEED RAG](docs/SUSTAINABILITY_LEED_RAG.md)
+- [Sustainability dashboard and reports](docs/SUSTAINABILITY_REPORTING_UI.md)
+- [Sustainability implementation plan](docs/SUSTAINABILITY_IMPLEMENTATION_PLAN.md)
 - [Integrated project report](REPORT.md)
 - [RAG architecture](docs/RAG_ARCHITECTURE.md)
 - [Multi-file workflows and federation](docs/MULTI_FILE_WORKFLOWS.md)
@@ -368,7 +400,10 @@ The current project targets trusted development/private evaluation. Before publi
 - isolate or remove trusted server-path ingestion endpoints;
 - add upload limits, validation/scanning, quotas, and rate limiting;
 - move extraction, embedding, loading, and clash analysis to durable background jobs;
+- move sustainability analysis and large report assembly to durable jobs;
 - use shared durable storage for registry, conversations, vectors, and staging;
+- supply and govern an authoritative regional carbon-factor dataset; the bundled CSV is only a template;
+- treat AABB-derived quantities as low-quality estimates and LEED findings as non-certifying, session-scoped evidence;
 - normalize the clash threshold to physical units and confirm AABB candidates with exact geometry where required.
 
 See [REPORT.md](REPORT.md) for the verified operational limitations and recommended next work.

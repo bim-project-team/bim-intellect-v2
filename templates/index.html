@@ -15,7 +15,7 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="/static/style.css?v=10" />
+  <link rel="stylesheet" href="/static/style.css?v=11" />
 
   <!-- three.js ships as ESM and its addons import the bare specifier "three".
        This map resolves those to the vendored copy under /static/vendor, so the
@@ -72,6 +72,11 @@
           <button class="nav-btn" data-tab="results">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18.7 8 13 13.7l-3-3L6 14.7"/></svg>
             <span data-i18n="nav.results">Results</span>
+          </button>
+
+          <button class="nav-btn" data-tab="sustainability">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22V10"/><path d="M12 15c-4.5 0-8-2.5-8-7 4.5 0 8 2.5 8 7Z"/><path d="M12 11c0-4.5 3.5-7 8-7 0 4.5-3.5 7-8 7Z"/></svg>
+            <span data-i18n="nav.sustainability">Sustainability</span>
           </button>
 
           <button class="nav-btn" data-tab="corpus">
@@ -175,6 +180,16 @@
                           data-q="List all clashes involving slabs."
                           data-q-fa="تمام برخوردهای مربوط به دال‌ها را فهرست کن.">
                     <span data-i18n="chat.example3">List all clashes involving slabs.</span>
+                  </button>
+                  <button class="example-q"
+                          data-q="What is the estimated embodied carbon of this project?"
+                          data-q-fa="کربن نهفته برآوردشده این پروژه چقدر است؟">
+                    <span data-i18n="chat.example4">What is this project's estimated embodied carbon?</span>
+                  </button>
+                  <button class="example-q"
+                          data-q="Which materials contribute most to embodied carbon and what relevant LEED guidance applies?"
+                          data-q-fa="کدام مصالح بیشترین سهم کربن نهفته را دارند و چه راهنمای مرتبط LEED وجود دارد؟">
+                    <span data-i18n="chat.example5">Which materials contribute most, and what LEED guidance applies?</span>
                   </button>
                 </div>
               </div>
@@ -425,6 +440,151 @@
         </section>
 
         <!-- ==================================================================
+             TAB: SUSTAINABILITY
+             ================================================================== -->
+        <section id="tab-sustainability" class="tab-content">
+          <div class="tab-scroll">
+            <div class="sustainability-layout">
+
+              <div class="panel">
+                <div class="panel-header row">
+                  <div>
+                    <h2 data-i18n="sustainability.title">Sustainability analysis</h2>
+                    <p data-i18n="sustainability.subtitle">Deterministic embodied-carbon results for the active project and IFC scope.</p>
+                  </div>
+                  <div class="panel-header-actions">
+                    <button id="sustainability-refresh-btn" class="btn btn-secondary btn-sm" data-i18n="common.refresh">Refresh</button>
+                    <button id="sustainability-run-btn" class="btn btn-primary btn-sm" data-i18n="sustainability.run">Run analysis</button>
+                  </div>
+                </div>
+                <div class="panel-body sustainability-scope-controls">
+                  <div class="form-group">
+                    <span class="form-label" data-i18n="sustainability.project">Project</span>
+                    <strong id="sustainability-project" dir="auto">—</strong>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="sustainability-scope-mode" data-i18n="sustainability.scope">IFC scope</label>
+                    <select id="sustainability-scope-mode">
+                      <option value="selected" data-i18n="sustainability.selectedModels">Selected IFC files</option>
+                      <option value="all" data-i18n="sustainability.allModels">All ingested project models</option>
+                    </select>
+                    <p id="sustainability-scope-files" class="hint" dir="auto">—</p>
+                  </div>
+                  <label class="checkbox-row sustainability-derived-control">
+                    <input type="checkbox" id="sustainability-derived-toggle" />
+                    <span data-i18n="sustainability.allowDerived">Allow low-quality geometry-derived estimates when explicit quantities are unavailable</span>
+                  </label>
+                  <div id="sustainability-status" class="status-banner">
+                    <span class="status-icon" aria-hidden="true"></span>
+                    <span data-i18n="sustainability.empty">No analysis loaded for this exact scope.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sustainability-kpis" id="sustainability-kpis" aria-live="polite"></div>
+
+              <div class="panel">
+                <div class="panel-header row">
+                  <h3 data-i18n="sustainability.breakdown">Carbon breakdown</h3>
+                  <label class="inline-field" for="sustainability-breakdown-select">
+                    <span class="sr-only" data-i18n="sustainability.breakdown">Carbon breakdown</span>
+                    <select id="sustainability-breakdown-select">
+                      <option value="by_material" data-i18n="sustainability.byMaterial">Material</option>
+                      <option value="by_ifc_type" data-i18n="sustainability.byIfcType">IFC type</option>
+                      <option value="by_discipline" data-i18n="sustainability.byDiscipline">Discipline</option>
+                      <option value="by_source_ifc_file" data-i18n="sustainability.byFile">Source IFC file</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="panel-body">
+                  <div id="sustainability-breakdown" class="carbon-bars">
+                    <p class="hint" data-i18n="sustainability.noAnalysis">Run or load an analysis to see results.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3 data-i18n="sustainability.topContributors">Top contributors</h3></div>
+                <div class="table-container">
+                  <table class="data-table sustainability-table">
+                    <thead><tr>
+                      <th data-i18n="sustainability.element">Element</th>
+                      <th data-i18n="results.ifcType">IFC type</th>
+                      <th data-i18n="sustainability.guid">IFC GUID</th>
+                      <th data-i18n="sustainability.sourceFile">Source IFC file</th>
+                      <th data-i18n="sustainability.material">Material</th>
+                      <th data-i18n="sustainability.quantity">Quantity</th>
+                      <th data-i18n="sustainability.factor">Factor</th>
+                      <th data-i18n="sustainability.kgco2e">kgCO2e</th>
+                    </tr></thead>
+                    <tbody id="sustainability-contributors-body">
+                      <tr><td colspan="8" class="empty" data-i18n="sustainability.noAnalysis">Run or load an analysis to see results.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3 data-i18n="sustainability.dataQuality">Data quality</h3></div>
+                <div class="panel-body">
+                  <div id="sustainability-quality" class="quality-grid"></div>
+                  <div class="table-container quality-detail-table">
+                    <table class="data-table">
+                      <thead><tr>
+                        <th data-i18n="sustainability.element">Element</th>
+                        <th data-i18n="sustainability.sourceFile">Source IFC file</th>
+                        <th data-i18n="sustainability.material">Material</th>
+                        <th data-i18n="sustainability.status">Status</th>
+                        <th data-i18n="sustainability.reason">Reason</th>
+                      </tr></thead>
+                      <tbody id="sustainability-quality-body">
+                        <tr><td colspan="5" class="empty" data-i18n="sustainability.noAnalysis">Run or load an analysis to see results.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3 data-i18n="sustainability.leedAssessment">LEED / sustainability assessment</h3></div>
+                <div class="panel-body">
+                  <p class="hint" data-i18n="sustainability.leedHint">Findings appear after a grounded LEED assessment question is asked in Chat. They are session-only and are not certification decisions.</p>
+                  <div class="table-container">
+                    <table class="data-table">
+                      <thead><tr>
+                        <th data-i18n="sustainability.criterion">Criterion / requirement</th>
+                        <th data-i18n="sustainability.status">Assessment status</th>
+                        <th data-i18n="sustainability.evidence">Evidence</th>
+                        <th data-i18n="sustainability.citation">Document citation</th>
+                        <th data-i18n="sustainability.missingData">Missing project data</th>
+                      </tr></thead>
+                      <tbody id="sustainability-assessment-body">
+                        <tr><td colspan="5" class="empty" data-i18n="sustainability.noFindings">No grounded assessment findings for this scope in the current chat session.</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header row">
+                  <div>
+                    <h3 data-i18n="sustainability.reports">Reports</h3>
+                    <p data-i18n="sustainability.reportHint">Downloads preserve scope, factor provenance, breakdowns, exclusions, findings, citations, and limitations.</p>
+                  </div>
+                  <div class="panel-header-actions">
+                    <button class="btn btn-secondary btn-sm sustainability-report-btn" data-format="json" disabled>JSON</button>
+                    <button class="btn btn-secondary btn-sm sustainability-report-btn" data-format="csv" disabled>CSV</button>
+                    <button class="btn btn-secondary btn-sm sustainability-report-btn" data-format="html" disabled>HTML</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
              TAB: CORPUS
              ================================================================== -->
         <section id="tab-corpus" class="tab-content">
@@ -453,6 +613,27 @@
                       <p class="hint" data-i18n="corpus.docIdHint">
                         Used only when exactly one PDF is selected. Batch IDs come from filename and content hash.
                       </p>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="form-label" for="document-domain" data-i18n="corpus.domain">Document domain</label>
+                      <select id="document-domain">
+                        <option value="regulation" data-i18n="corpus.domainRegulation">Regulation</option>
+                        <option value="sustainability" data-i18n="corpus.domainSustainability">Sustainability</option>
+                        <option value="leed">LEED</option>
+                        <option value="standard" data-i18n="corpus.domainStandard">Standard</option>
+                      </select>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="form-label" for="standard-name" data-i18n="corpus.standardName">Standard name</label>
+                      <input type="text" id="standard-name" dir="auto" placeholder="LEED" />
+                    </div>
+
+                    <div class="form-group">
+                      <label class="form-label" for="standard-version" data-i18n="corpus.standardVersion">Standard version</label>
+                      <input type="text" id="standard-version" dir="auto" placeholder="v4.1" />
+                      <p class="hint" data-i18n="corpus.standardHint">Version is required for LEED and standard documents.</p>
                     </div>
 
                     <div id="upload-status" class="status-banner hidden">
@@ -493,11 +674,12 @@
     </div>
   </div>
 
-  <script src="/static/i18n.js?v=3"></script>
+  <script src="/static/i18n.js?v=4"></script>
   <!-- Module, because three.js is ESM. Publishes window.bimViewer for app.js.
        Deferred by nature, so app.js (classic) may load first; app.js therefore
        treats the viewer as optional rather than assuming it exists. -->
   <script type="module" src="/static/viewer.js?v=1"></script>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/sustainability.js?v=1"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 # BIM-Intellect v2 — System Documentation
 
-**Document version:** 2.0
+**Document version:** 2.4
 
-**Updated:** 2026-08-28
+**Updated:** 2026-09-05
 
-**Applies to:** `fix/rag-grounded-api` after integration of `feature/ui-ux` at `0d4aff7`
+**Applies to:** the current integrated BIM-Intellect v2 tree
 
 ## Contents
 
@@ -15,7 +15,7 @@
 5. [Neo4j graph model](#5-neo4j-graph-model)
 6. [Clash and clearance detection](#6-clash-and-clearance-detection)
 7. [Graph anomaly detection](#7-graph-anomaly-detection)
-8. [Regulation RAG and graph QA](#8-regulation-rag-and-graph-qa)
+8. [Regulation RAG, graph QA, and sustainability reasoning](#8-regulation-rag-graph-qa-and-sustainability-reasoning)
 9. [API reference](#9-api-reference)
 10. [Module reference](#10-module-reference)
 11. [Configuration](#11-configuration)
@@ -38,11 +38,15 @@ The current system can:
 - load a project-aware graph into Neo4j;
 - detect AABB clashes and clearance violations within or across selected files;
 - optionally enrich elements and clash relationships with graph-anomaly scores;
+- deterministically extract IFC materials/quantities and calculate project/file-scoped embodied-carbon estimates from operator-supplied factors;
+- classify LEED/sustainability standards and combine cited requirements with deterministic project sustainability evidence;
+- review project/file-scoped sustainability KPIs, carbon breakdowns, contributors, and data-quality exclusions in a bilingual dashboard;
+- download auditable JSON, CSV, or printable HTML sustainability reports;
 - upload and index multiple regulation PDFs in a multilingual ChromaDB collection;
 - maintain bounded conversation context;
-- route questions to regulation retrieval, graph retrieval, both, or conversation handling;
+- route questions to regulation retrieval, graph retrieval, deterministic sustainability retrieval, combinations of those sources, or conversation handling;
 - generate schema-aware Cypher for common BIM question shapes;
-- require supported clause/page citations for regulatory claims;
+- require supported clause/page or document/section/page citations for documentary claims;
 - present all workflows through a responsive English/Persian interface.
 
 Typical questions include:
@@ -53,6 +57,8 @@ Typical questions include:
 | How many `IfcStair` elements are loaded? | Graph | Exact property-based count |
 | List clashes between `IfcWall` and `IfcFlowSegment`. | Graph | Issue, metric, names, and IDs |
 | Does this model satisfy the retrieved stair requirement? | Regulation + graph | Cited requirement plus graph facts |
+| What is the estimated embodied carbon for this project? | Sustainability | Stored deterministic run and factor provenance |
+| Which materials contribute most, and what LEED guidance applies? | Sustainability + LEED | Stored carbon results plus cited document evidence |
 | What did I ask previously about Level 5? | Conversation | Bounded session memory |
 
 The application supports engineering review; it is not a certified code-checking or exact-geometry coordination product.
@@ -74,6 +80,10 @@ flowchart TD
     Graph --> Clash[Rule-based clash detector]
     Clash --> Graph
     Graph --> GraphQA[Template/planner/LLM graph retrieval]
+    IFC --> Carbon[Deterministic sustainability analysis]
+    Graph --> Carbon
+    Factors[Versioned carbon-factor CSV] --> Carbon
+    Carbon --> Graph
 
     PDF[Regulation PDFs] --> Chunker[Clause-aware PDF chunker]
     Chunker --> Embed[Local multilingual embeddings]
@@ -82,11 +92,41 @@ flowchart TD
 
     GraphQA --> RAG[Grounded orchestrator]
     Retrieval --> RAG
+    Graph --> Sust[Deterministic sustainability retriever]
+    Sust --> RAG
     RAG --> OpenRouter[OpenRouter language models]
     OpenRouter --> API
 
     GNN[Optional graph autoencoder] --> Clash
 ```
+
+The completed sustainability path can also be read as the following evidence-flow diagram:
+
+                             BIM-Intellect
+                                  |
+            +---------------------+----------------------+
+            |                     |                      |
+           IFC              Regulations / LEED      Carbon Factors
+            |                     |                      |
+            v                     v                      v
+         Neo4j                 ChromaDB          Sustainability Engine
+            |                     |                      |
+            +-- Clash             |                      +-- Material
+            +-- Anomaly           |                      +-- Quantity
+            +-- BIM facts         |                      +-- Carbon
+            |                     |                      |
+            +-------------+-------+--------------+-------+
+                          v                      v
+                     Orchestrator          Assessment Layer
+                          |                      |
+                          +----------+-----------+
+                                     v
+                               Grounded LLM
+                                     |
+                       +-------------+--------------+
+                       v             v              v
+                      Chat      Sustainability    Reports
+                                  Dashboard
 
 ### Main runtime services
 
@@ -99,22 +139,25 @@ flowchart TD
 | Embeddings | Sentence Transformers | Local multilingual semantic embedding |
 | Reranking | Hybrid TF-IDF/dense or optional BGE cross-encoder | Candidate ranking |
 | Language models | OpenRouter through the OpenAI-compatible SDK | Query understanding, novel Cypher, final answer |
+| Sustainability | Deterministic Python modules plus additive Neo4j records | Material/quantity extraction, factor matching, carbon calculation, aggregation |
+| Reporting | Python JSON/CSV/HTML renderers | Exact-scope sustainability exports without recalculation |
 | Optional ML | PyTorch sparse GCN autoencoder | Unsupervised graph anomaly scoring |
 
 `main.py` mounts every backend route under `/api`, serves `/static`, and returns `templates/index.html` at `/`. Static paths are resolved from the source location, so launching Uvicorn from a different working directory does not break the frontend.
 
 ## 3. User interface
 
-The integrated UI is implemented in `templates/index.html`, `static/style.css`, `static/i18n.js`, and `static/app.js`.
+The integrated UI is implemented in `templates/index.html`, `static/style.css`, `static/i18n.js`, `static/app.js`, and `static/sustainability.js`.
 
 ### 3.1 Workspace structure
 
-The application has four views:
+The application has five views:
 
 - **Chat:** hybrid graph/regulation questions, example questions, stronger-model mode, source tags, and retrieval diagnostics.
 - **Pipeline:** project ID, multi-IFC upload, registered-model selection, storey/type filtering, graph reset option, ingestion, analysis, and activity logging.
 - **Results:** All Issues, Clashes, and Clearances with graph-derived filters and project context.
-- **Documents:** multi-PDF upload, optional single-document ID, stored-document inventory, and collection clearing.
+- **Sustainability:** exact project/IFC scope, embodied-carbon KPIs, breakdowns, top contributors, data-quality exclusions, grounded session LEED findings, and report downloads.
+- **Documents:** multi-PDF upload, optional single-document ID, document domain/standard/version classification, stored-document inventory, and collection clearing.
 
 Navigation is an overlay drawer. Chat analysis context is a separate drawer. A shared scrim, close controls, responsive breakpoints, and `Escape` handling keep both drawers usable on desktop and mobile.
 
@@ -243,6 +286,12 @@ The project model is:
 
 Project extraction, CSV staging, graph loading, and optional clash detection run inside a process-local reentrant lock to avoid concurrent use of shared staging files.
 
+### 4.7 Sustainability analysis lifecycle
+
+Sustainability analysis is a separate, explicitly triggered operation after project ingestion. It resolves the requested project and file IDs through the registry, requires those files to be in `ingested` state, repeats federation validation, and reads the retained semantic element set from Neo4j. It then reopens each registered source IFC to extract material and quantity evidence only for those retained graph elements.
+
+The service does not modify `extract_graph.py` CSV columns or place carbon totals directly on `Element`. A completed run and its evidence are written to the additive sustainability subgraph. Re-running the same scope creates a new run and marks the prior current run for that exact scope as historical. The operation is synchronous and shares the process-local pipeline lock with graph ingestion.
+
 ## 5. Neo4j graph model
 
 ### 5.1 Element nodes
@@ -291,6 +340,24 @@ isAnomaly
 ```
 
 `CLASHES_WITH` is a directed storage representation; its direction is not engineering causality.
+
+### 5.4 Additive sustainability subgraph
+
+The sustainability implementation adds versioned `SustainabilityRun`, `SustainabilityResult`, `MaterialUse`, `Material`, `QuantityEvidence`, and `CarbonFactor` nodes. They link to existing project/model/element nodes without changing `Element` properties or clash/anomaly relationships. Results preserve the exact quantity evidence, allocation share, factor provenance, project/file identity, calculation status, and methodology version. See [Sustainability carbon analysis](docs/SUSTAINABILITY_CARBON_ANALYSIS.md) for the full schema and limitations.
+
+### 5.5 Material, quantity, and carbon rules
+
+Material extraction follows `IfcRelAssociatesMaterial` on an occurrence and falls back to its IFC type only when no usable occurrence assignment exists. Supported material selections include direct materials, layer/layer-set usage, profile/profile-set usage, constituent/constituent-set, and legacy material lists. The authored name is preserved; normalization and category assignment create separate deterministic lookup fields.
+
+Explicit `IfcElementQuantity` values are read from occurrence or type definitions, including volume, area, length, and weight quantities. Values normalize to compatible SI bases (`m3`, `m2`, `m`, or `kg`). When explicitly enabled, missing dimensions may be estimated from stored AABB bounds for a limited IFC-type allowlist. Such values retain `geometry_derived`, a derivation method, and low-quality status. The engine never relabels them as IFC-authored values.
+
+Carbon factors are exact normalized-name/approved-alias matches from the configured CSV. Matching may be `matched`, `ambiguous`, or `unmatched`. A result is calculated only when a unique enabled factor and an unambiguous compatible quantity are available. For one material the full selected quantity is used; supported layer-thickness or constituent-fraction allocations are marked as estimates. Other multi-material allocations fail closed. The deterministic formula is:
+
+```text
+carbon_kgco2e = normalized_quantity × factor_value
+```
+
+Supported factor denominators are kg, m3, and m2. Missing materials, factors, quantities, ambiguous evidence, implausible explicit values, and incompatible units are excluded from totals rather than treated as zero. The checked-in CSV contains only its schema header, so deployments must supply reviewed factors before expecting calculated carbon values.
 
 ## 6. Clash and clearance detection
 
@@ -448,7 +515,7 @@ When `/api/analyze` enables anomaly mode, node scores are written to elements an
 
 Anomaly inference never changes `issue` or `metric`. Missing checkpoints and scoring failures produce warnings and allow deterministic clash analysis to continue.
 
-## 8. Regulation RAG and graph QA
+## 8. Regulation RAG, graph QA, and sustainability reasoning
 
 ### 8.1 Versioned multilingual index
 
@@ -511,11 +578,29 @@ Plans use parameters and declare required result columns. Neo4j `EXPLAIN` valida
 
 ### 8.6 Routing and grounded answers
 
-The orchestrator decides whether a request needs regulation retrieval, graph retrieval, both, or neither. Explicit IFC types, Neo4j schema terms, issue constants, and anomaly property names force graph routing unless regulation evidence is also explicitly requested.
+The orchestrator decides independently whether a request needs document retrieval, ordinary graph retrieval, deterministic sustainability retrieval, a grounded combination, or neither. Explicit IFC types, Neo4j schema terms, issue constants, and anomaly property names force graph routing unless documentary evidence is also explicitly requested.
 
-Regulatory statements must cite an actually retrieved clause/page pair. Citation parsing normalizes Persian digits. Unsupported, malformed, or invented citations trigger repair or a fail-closed insufficient-evidence response. Graph sources contain element identity/provenance when available.
+Documentary statements must cite an actually retrieved clause/page pair or named document/section/page triplet. Citation parsing normalizes Persian digits. Unsupported, malformed, or invented citations trigger repair or a fail-closed insufficient-evidence response. Graph sources contain element identity/provenance when available.
 
 The standard model profile defaults to `openai/gpt-4o-mini` for understanding and final generation. The optional stronger profile defaults to `google/gemini-2.5-flash` for routing/understanding and `anthropic/claude-sonnet-4.5` for the final grounded answer.
+
+### 8.7 Sustainability and LEED hybrid reasoning
+
+Document chunks may carry `document_domain` (`regulation`, `sustainability`, `leed`, or `standard`), `standard_name`, and `standard_version`. Omitted and legacy metadata defaults to `regulation`. Sustainability document searches filter dense retrieval, lexical fallback, reranking, and expanded context to the classified domains.
+
+The orchestrator treats stored sustainability runs as a third evidence source, separate from ordinary graph facts and documentary RAG. `project_id` and selected `file_ids` resolve the exact deterministic carbon run. Hybrid answers receive separate document, graph, sustainability, and conservative assessment blocks. Project carbon totals, estimates, contributions, and calculated values absent from deterministic sustainability evidence are rejected after generation; a documentary numeric requirement is accepted only when it occurs in retrieved text and its answer line has a validated citation.
+
+Named sections without a numeric clause use `[Document <document_id>, Section <section_id>, Page <page>]`; the existing `[Clause <clause>, Page <page>]` form remains valid. Both are checked against current retrieval metadata. LEED-oriented statuses are `satisfied_from_available_evidence`, `not_satisfied_from_available_evidence`, `insufficient_evidence`, and `not_automatically_evaluable`; no certification level is inferred.
+
+### 8.8 Sustainability dashboard, findings, and reports
+
+The fifth workspace view reuses the active project and multi-IFC selection. Operators may analyze the selected files or all ingested files in that project. Before rendering, the browser validates the returned project and exact selected-file set and discards stale responses using a monotonically increasing request token.
+
+Summary cards, CSS-native breakdown bars, contributor rows, and data-quality tables are populated only from persisted sustainability APIs. Unknown carbon is shown as unknown rather than zero. Explicit IFC quantities and derived/allocation estimates carry different badges.
+
+Hybrid LEED assessment answers that pass citation and numeric validation are copied into a bounded conversation-scoped finding ledger. The dashboard and reports read only findings whose conversation, project, and file set match. Findings remain session-only explanatory evidence and are never used as carbon inputs or stored as certification decisions.
+
+The `sustainability-report-v1` assembler emits JSON, flat CSV, and printable HTML without recalculating carbon. JSON is the complete machine-readable representation and includes item-level data-quality exceptions. CSV contains report/run fields, selected models, summary and breakdown rows, top contributors, used factors, quality counts, LEED-oriented findings, citations, and limitations. HTML presents the project/run, summary, breakdowns, top contributors, quality counts, LEED-oriented findings, and limitations. All formats retain exact scope and factor-dataset identity; only JSON currently carries the full quality-item list.
 
 ## 9. API reference
 
@@ -558,6 +643,32 @@ All entries below are relative to `/api`.
 
 Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 
+Sustainability endpoints are project/file scoped:
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/sustainability/analyze` | Extract evidence and run deterministic carbon analysis |
+| GET | `/sustainability/summary` | Retrieve an exact-scope current or historical run summary |
+| GET | `/sustainability/materials` | Retrieve material/result aggregates |
+| GET | `/sustainability/elements` | Retrieve paginated element/material-use results |
+| GET | `/sustainability/factors` | Inspect factor dataset status and provenance |
+| GET | `/sustainability/assessment-findings` | Exact-scope grounded findings from one conversation session |
+| GET | `/sustainability/report` | Download the persisted run as JSON, CSV, or printable HTML |
+
+Analysis request example:
+
+```json
+{
+  "project_id": "project-a",
+  "file_ids": ["architecture-abcdef123456"],
+  "factor_dataset_version": null,
+  "region": null,
+  "allow_geometry_derived": false
+}
+```
+
+Read endpoints take repeated `file_id` query parameters, not the body field name `file_ids`. Omitting them means all currently ingested files in that project. `run_id` may select a historical exact-scope run. `/elements` additionally supports calculation `status`, exact `ifc_type`, `limit` (maximum 1,000), and `offset`. `/report` accepts `format=json|csv|html` and optional `conversation_id`; findings are present only when that conversation contains a grounded finding for the exact project/file set.
+
 ### 9.3 Regulation corpus
 
 | Method | Path | Description |
@@ -567,11 +678,13 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 | GET | `/rag/status` | Collection metadata, chunk count, samples, and indexed documents |
 | DELETE | `/rag/clear` | Delete the complete configured collection |
 
+`/rag/upload` and `/rag/ingest` accept optional `document_domain`, `standard_name`, and `standard_version` query parameters. Existing callers default to `regulation`. `document_domain=leed` requires a version and defaults the standard name to `LEED`; `document_domain=standard` requires both a name and version.
+
 ### 9.4 Question answering
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/ask` | Conversation-aware grounded vector/graph orchestration |
+| POST | `/ask` | Conversation-aware grounded document/graph/sustainability orchestration |
 | POST | `/ask-vector` | Legacy vector-only path |
 | POST | `/ask-graph` | Graph retrieval/debug path |
 | DELETE | `/rag/conversations/{conversation_id}` | Remove one in-memory conversation |
@@ -583,7 +696,9 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
   "question": "How many clashes are on Level 5?",
   "conversation_id": "optional-id",
   "use_strong_models": false,
-  "selected_element_id": null
+  "selected_element_id": null,
+  "project_id": "optional-project",
+  "file_ids": ["optional-source-file-id"]
 }
 ```
 
@@ -601,6 +716,7 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 |---|---|
 | `main.py` | Application creation, CORS, validation handler, router/static/UI mounts |
 | `api/routes.py` | HTTP contracts and pipeline orchestration |
+| `api/sustainability_routes.py` | Sustainability HTTP contracts |
 
 ### IFC and graph
 
@@ -611,6 +727,7 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 | `bim_graph/project_registry.py` | Project/file manifest and provenance states |
 | `bim_graph/coordinate_system.py` | IFC coordinate inspection and federation checks |
 | `bim_graph/load_to_neo4j.py` | Batched Neo4j loading and project graph replacement |
+| `bim_graph/pipeline_lock.py` | Shared process-local lock for graph and sustainability pipeline mutations |
 | `bim_graph/neo4j_client.py` | Neo4j driver wrapper, batching, `EXPLAIN`, counts |
 | `bim_graph/clash_pipeline.py` | Deterministic issue detection and optional anomaly integration |
 | `bim_graph/query_planner.py` | Complete parameterized plans for high-risk graph shapes |
@@ -618,12 +735,30 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 | `bim_graph/cypher_generator.py` | Read-only free-form and corrective Cypher generation |
 | `bim_graph/graph_retriever.py` | Query selection, validation, execution, completeness, formatting |
 
+### Sustainability
+
+| File | Responsibility |
+|---|---|
+| `sustainability/config.py` | Methodology/extractor versions, factor path, batch size, and derived-quantity policy |
+| `sustainability/models.py` | Typed material, quantity, factor, element-evidence, and result records |
+| `sustainability/ifc_extractor.py` | IFC material and explicit/derived/unavailable quantity evidence |
+| `sustainability/normalization.py` | Raw-preserving deterministic material normalization |
+| `sustainability/units.py` | SI normalization and dimensional compatibility |
+| `sustainability/factors.py` | Validated CSV factors, dataset hash, and exact alias lookup |
+| `sustainability/calculator.py` | Deterministic calculation, allocation, and aggregation |
+| `sustainability/repository.py` | Additive Neo4j persistence, reads, and re-ingestion cleanup |
+| `sustainability/service.py` | Project/file scope resolution and analysis orchestration |
+| `sustainability/retriever.py` | Bounded deterministic sustainability evidence for chat |
+| `sustainability/assessment.py` | Conservative LEED-oriented evidence states |
+| `sustainability/reporting.py` | Canonical report assembly and JSON/CSV/HTML rendering |
+
 ### RAG
 
 | File | Responsibility |
 |---|---|
 | `rag/config.py` | Environment-backed model, index, retrieval, and memory settings |
 | `rag/chunker.py` | Multilingual clause/page-aware PDF chunking |
+| `rag/document_metadata.py` | Document-domain and standard metadata validation |
 | `rag/embedder.py` | Local embeddings and Chroma collection operations |
 | `rag/indexer.py` | Versioned corpus rebuild/status CLI |
 | `rag/retrieval.py` | Multi-query retrieval, fallback, expansion, context assembly |
@@ -652,6 +787,7 @@ Issue endpoints accept `storey`, comma-separated `types`, and `project_id`.
 | `static/style.css` | Responsive monochrome LTR/RTL presentation |
 | `static/i18n.js` | English/Persian interface localization |
 | `static/app.js` | Browser state, API calls, uploads, filters, rendering, drawers |
+| `static/sustainability.js` | Project-safe sustainability state, dashboard rendering, and downloads |
 | `Dockerfile` | Python 3.12 application image |
 | `docker-compose.yml` | Neo4j-only development service |
 | `docker-compose.client.yml` | Full Neo4j + application deployment |
@@ -673,12 +809,19 @@ Copy `.env.example` to `.env` and provide the required OpenRouter key. `.env` is
 | `EDGES_CSV` | `edges.csv` | Staging edge CSV |
 | `BIM_PROJECT_STORAGE_DIR` | `dataset/ifc/projects` | Registered model storage |
 | `BIM_PROJECT_REGISTRY` | `dataset/ifc/project_registry.json` | Registry manifest |
+| `SUSTAINABILITY_CARBON_FACTORS` | `dataset/sustainability/carbon_factors.csv` | Reviewed carbon-factor CSV; checked-in file is a header-only template |
+| `SUSTAINABILITY_BATCH_SIZE` | `500` | Neo4j sustainability persistence batch size |
 
 ### 11.2 Models and index
 
 | Variable | Default |
 |---|---|
 | `OPENROUTER_API_KEY` | required for LLM operations |
+| `OPENROUTER_CHAT_MODEL` | `openai/gpt-4o-mini` legacy fallback for standard router/final settings |
+| `OPENROUTER_SITE_URL` | empty optional attribution URL |
+| `OPENROUTER_SITE_NAME` | `BIM-Intellect` |
+| `OPENROUTER_MAX_RETRIES` | `2` total attempts in the shared retry wrapper |
+| `OPENROUTER_BASE_BACKOFF` | `1.5` seconds before exponential backoff/jitter |
 | `RAG_ROUTER_MODEL` | `openai/gpt-4o-mini` |
 | `RAG_FINAL_MODEL` | `openai/gpt-4o-mini` |
 | `RAG_STRONG_ROUTER_MODEL` | `google/gemini-2.5-flash` |
@@ -702,6 +845,7 @@ Copy `.env.example` to `.env` and provide the required OpenRouter key. `.env` is
 | `RAG_NEIGHBOR_WINDOW` | `2` |
 | `RAG_MAX_CONTEXT_CHARS` | `28000` |
 | `RAG_WEAK_RELEVANCE_THRESHOLD` | `0.18` |
+| `RAG_LEXICAL_POOL_LIMIT` | `5000` |
 | `RAG_RERANKER_PROVIDER` | `hybrid` |
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` |
 | `RAG_DENSE_WEIGHT` | `0.65` |
@@ -731,6 +875,8 @@ python -m uvicorn main:app --reload
 
 Open `http://localhost:8000`. Neo4j Browser is available at `http://localhost:7474` in the development composition.
 
+`dataset/sustainability/carbon_factors.csv` is intentionally header-only. Replace or populate it with reviewed records following its README/schema before using carbon totals. Neo4j Browser uses HTTP on 7474; the application connects to Neo4j through Bolt on 7687.
+
 ### 12.2 Full Docker deployment
 
 ```powershell
@@ -759,22 +905,24 @@ Inside Compose the application uses `bolt://neo4j:7687`, not localhost.
 3. Select parsed models and optional storey/type subsets.
 4. Run ingestion and clash analysis.
 5. Open **Results** to filter and review detected issues.
-6. Open **Chat** to ask regulation, graph, or combined questions.
+6. Open **Sustainability**, choose selected or all project models, run/load the analysis, inspect coverage and exclusions, and download a report.
+7. Open **Chat** to ask regulation, graph, sustainability, LEED, or combined questions. Grounded LEED assessment findings then appear in the Sustainability view for that conversation and exact scope.
 
 ## 13. Testing and verification
 
-The integrated tree was verified on 2026-08-28 with:
+The integrated tree was verified on 2026-09-05 with:
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
 python -m pytest -q
 node --check static/app.js
 node --check static/i18n.js
-python -m compileall -q api bim_graph rag main.py extract_graph.py extract_sotreys_type.py
+node --check static/sustainability.js
+python -m compileall -q api bim_graph rag sustainability main.py extract_graph.py extract_sotreys_type.py
 docker compose -f docker-compose.client.yml config
 ```
 
-Result: **84 tests passed, 3 skipped**. The skips are environment/optional-integration dependent. A global incompatible Hydra/OmegaConf pytest plugin on the verification workstation required disabling third-party plugin auto-loading; it was not a project test failure.
+Result: **122 tests passed, 1 skipped** in **50.60 seconds**. The combined focused sustainability suite passed **36 tests**, including **6 Phase 3 dashboard/reporting tests**. The skip is environment/optional-integration dependent. A global incompatible Hydra/OmegaConf pytest plugin on the verification workstation required disabling third-party plugin auto-loading; it was not a project test failure.
 
 Test coverage includes:
 
@@ -783,9 +931,13 @@ Test coverage includes:
 - AABB rules, anomaly feature/model behavior, and clash enrichment;
 - project registry, coordinate federation, multi-file extraction/provenance;
 - scalar and repeated multipart upload compatibility;
-- frontend input contracts and API OpenAPI schemas.
+- IFC material/quantity extraction, unit safety, factors, carbon arithmetic, provenance, aggregation, project isolation, re-ingestion, and sustainability API contracts;
+- classified sustainability document filtering, named-section citations, hybrid evidence, assessment states, missing evidence, numeric grounding, and model-profile parity;
+- frontend project/scope isolation, bilingual dashboard contracts, report formats, session assessment findings, and API OpenAPI schemas.
 
-Frontend serving returned HTTP 200 and generated OpenAPI successfully. Docker Compose configuration validated. At verification time local Chroma was reachable while Neo4j was not running, so `/api/health` correctly returned HTTP 503.
+Frontend serving returned HTTP 200 and generated OpenAPI successfully. Docker Compose configuration validated. JavaScript syntax, Python compilation, and the carbon-factor JSON schema passed validation.
+
+A live local Neo4j instance was exercised through Bolt on port 7687 using the registered `210_King_Merged.ifc` model. Run `59a28482-e312-44c1-b251-34df65832614` persisted 10,773 evidence/result rows linked to 9,533 distinct elements with exact project/file provenance; summary, paginated elements, and JSON report APIs returned HTTP 200. The checked-in factor repository is intentionally header-only, so 0 elements were carbon-calculable and the UI/report treat the total as unavailable rather than as a verified zero. The local Chroma corpus had no classified LEED document, so live LEED retrieval was not fabricated; document filtering and hybrid behavior were verified with deterministic test fixtures.
 
 ## 14. Operations, security, and limitations
 
@@ -805,8 +957,9 @@ Production deployment should add identity, role checks, explicit origins, secret
 ### 14.2 Scalability and state
 
 - IFC extraction, graph import, clash detection, and PDF embedding run synchronously in HTTP handlers.
+- Sustainability extraction/calculation and report assembly also run synchronously; large IFC scopes and item-rich JSON reports can hold a request open.
 - A process-local lock serializes project ingestion but does not coordinate multiple workers/hosts.
-- Conversation memory, project registry, CSV staging, Chroma, and artifacts are local state.
+- Conversation memory, the session LEED-finding ledger, project registry, CSV staging, Chroma, and artifacts are local state.
 - Neo4j clients create a driver per operation rather than sharing one application-level pool.
 - Dense AABB candidate sets remain worst-case quadratic.
 - Result endpoints cap rows and graph LLM context shows no more than 25 rows.
@@ -819,6 +972,9 @@ Long-running work should move to durable background jobs with progress, cancella
 - `CLEARANCE_VIOLATION` means AABB separation below the fixed threshold.
 - An anomaly is an unsupervised reconstruction score, not a clash or code violation.
 - A regulatory answer is grounded only in retrieved corpus material; missing evidence should produce an insufficient-evidence answer.
+- A sustainability total covers only result rows with matched factors and compatible quantities. Unknown/unmatched rows are exclusions, not zero-carbon elements.
+- The bundled carbon-factor CSV is a non-authoritative empty template; meaningful carbon estimates require an operator-supplied, reviewed dataset.
+- LEED output is a session-scoped, evidence-oriented assessment. It is not credit scoring, certification, or proof of compliance.
 - A 200 response with an empty issue/filter list can currently hide a Neo4j exception in handlers that catch infrastructure errors, so health/status must also be checked.
 
 ## 15. Troubleshooting
@@ -862,6 +1018,14 @@ Confirm `RAG_COLLECTION_NAME`, index version, embedding model, and Chroma direct
 
 Confirm the configured OpenRouter account can access both strong-profile model IDs. The stronger option changes two models and can have different availability/cost.
 
+### Sustainability analysis is empty or has no carbon total
+
+Confirm the selected project files are registered with `status=ingested` and that an analysis exists for that exact file set. Inspect `/api/sustainability/factors`: the checked-in CSV is intentionally empty, and unmatched materials or incompatible/missing quantities are excluded from totals. Enable geometry-derived quantities only when low-quality AABB estimates are acceptable for the review.
+
+### LEED findings do not appear on the dashboard or report
+
+Upload the source document with the correct `document_domain`, standard name, and required version, then ask a hybrid sustainability/LEED question with the same project/file scope used by the dashboard. Findings are created only after grounded answer validation and are keyed to the current conversation, project, and exact file set. They disappear on process restart or conversation clearing.
+
 ### Pytest fails before collection in a shared Python environment
 
 Third-party auto-loaded plugins can conflict with the environment. Isolate dependencies in a virtual environment or run:
@@ -878,6 +1042,10 @@ python -m pytest -q
 - [`docs/MULTI_FILE_WORKFLOWS.md`](docs/MULTI_FILE_WORKFLOWS.md) — batch ingestion and federation contracts
 - [`docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md`](docs/CLASH_DETECTION_AND_GRAPH_ANOMALY.md) — clash/anomaly training and inference
 - [`docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md`](docs/GRAPH_RAG_QUERY_IMPROVEMENTS.md) — graph planning and completeness
+- [`docs/SUSTAINABILITY_CARBON_ANALYSIS.md`](docs/SUSTAINABILITY_CARBON_ANALYSIS.md) — implemented Phase 1 formulas, provenance, APIs, and limits
+- [`docs/SUSTAINABILITY_IMPLEMENTATION_PLAN.md`](docs/SUSTAINABILITY_IMPLEMENTATION_PLAN.md) — phased Sustainability + LEED architecture
+- [`docs/SUSTAINABILITY_LEED_RAG.md`](docs/SUSTAINABILITY_LEED_RAG.md) — classified documents, citations, routing, and hybrid reasoning
+- [`docs/SUSTAINABILITY_REPORTING_UI.md`](docs/SUSTAINABILITY_REPORTING_UI.md) — dashboard state, session findings, and report formats
 - [`README.md`](README.md) — concise setup entry point
 
 This file is the current system documentation. The referenced subsystem documents provide deeper implementation rationale and specialized commands.

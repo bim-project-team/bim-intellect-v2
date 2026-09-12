@@ -1,4 +1,4 @@
-// BIM-Intellect Frontend — Chat, Pipeline, Corpus, Results
+// BIM-Intellect Frontend — Chat, Pipeline, Results, Sustainability, Corpus
 //
 // Interface strings come from static/i18n.js via t(). Request URLs, payload
 // keys, and response field names are deliberately untouched by localisation —
@@ -208,6 +208,14 @@ let selectedElementId = null;
 let selectedPdfFiles = [];
 let selectedIfcFileIds = new Set();
 let ifcProjects = [];
+let sustainabilityState = {
+  scopeKey: null,
+  summary: null,
+  elements: [],
+  materials: [],
+  findings: [],
+  requestToken: 0,
+};
 
 // ------------------------------------------------------------------
 // DOM refs
@@ -288,6 +296,7 @@ const TAB_HEADERS = {
   chat: { title: "nav.chat", subtitle: "header.chat" },
   pipeline: { title: "nav.pipeline", subtitle: "header.pipeline" },
   results: { title: "nav.results", subtitle: "header.results" },
+  sustainability: { title: "nav.sustainability", subtitle: "header.sustainability" },
   corpus: { title: "nav.corpus", subtitle: "header.corpus" },
 };
 
@@ -396,6 +405,12 @@ navButtons.forEach((btn) => {
     if (target === "pipeline") {
       loadIfcProjects();
     }
+    if (target === "sustainability") {
+      loadIfcProjects().finally(() => {
+        renderSustainabilityScope();
+        loadSustainability();
+      });
+    }
 
     // Refresh Results tab filter options (Neo4j-backed) each time it's opened,
     // in case an ingest happened since the last visit.
@@ -416,7 +431,7 @@ navButtons.forEach((btn) => {
 
 // The project whose scenes are shown. Read from the Pipeline tab's field so the
 // chat and the viewer always agree on which building is being discussed.
-function activeProjectId() {
+function viewerProjectId() {
   return (projectIdInput && projectIdInput.value.trim()) || "";
 }
 
@@ -480,7 +495,7 @@ async function showInViewer(visualization, { related = false } = {}) {
   window.bimViewer.attach(viewerCanvas);
   openDrawer(viewerPanel, viewerToggle);
 
-  const projectId = visualization.project_id || activeProjectId();
+  const projectId = visualization.project_id || viewerProjectId();
   if (!projectId) {
     setViewerFooter([t("viewer.unavailable")]);
     return;
@@ -636,8 +651,10 @@ function appendChatMessage(role, text, sources, visualization) {
       const tag = document.createElement("span");
       tag.className = `chat-source-tag ${src.type || "regulation"}`;
       if (src.type === "regulation") {
-        tag.textContent =
-          `${t("chat.clause")} ${src.clause_id || "?"}, ${t("chat.page")} ${src.page_number || "?"}`;
+        const hasClause = src.clause_id && !["unknown", "none", "null"].includes(String(src.clause_id).toLowerCase());
+        tag.textContent = hasClause
+          ? `${t("chat.clause")} ${src.clause_id}, ${t("chat.page")} ${src.page_number || "?"}`
+          : `${src.standard_name || src.source || t("chat.regulation")} — ${t("chat.section")} ${src.section_id || "?"}, ${t("chat.page")} ${src.page_number || "?"}`;
 
         tag.title =
           `${t("chat.source")}: ${src.source || t("chat.regulation")} | ${t("chat.page")} ${src.page_number || "?"}`;
@@ -647,6 +664,9 @@ function appendChatMessage(role, text, sources, visualization) {
 
         tag.title =
           `${t("chat.elementId")}: ${src.element_id || "?"}`;
+      } else if (src.type === "sustainability") {
+        tag.textContent = `${t("chat.sourceSustainability")} — ${src.id || ""}`;
+        tag.title = `${src.project_id || ""} | ${(src.file_ids || []).join(", ")}`;
       } else {
         tag.textContent = JSON.stringify(src);
       }
@@ -706,8 +726,12 @@ async function sendChat(question) {
       selected_element_id: selectedElementId,
       conversation_id: conversationId,
       use_strong_models: Boolean(strongModelsToggle && strongModelsToggle.checked),
-      project_id: activeProjectId() || null,
     };
+    const activeProjectId = projectIdInput && projectIdInput.value.trim();
+    if (activeProjectId) payload.project_id = activeProjectId;
+    if (selectedIfcFileIds && selectedIfcFileIds.size) {
+      payload.file_ids = Array.from(selectedIfcFileIds);
+    }
 
     console.log("Sending /api/ask:", payload);
 
@@ -762,6 +786,7 @@ function updateChatMeta(data) {
   const parts = [];
   if (data.used_vector) parts.push(t("chat.sourceRegulations"));
   if (data.used_graph) parts.push(t("chat.sourceGraph"));
+  if (data.used_sustainability) parts.push(t("chat.sourceSustainability"));
 
   let html = `<p class="hint">${escapeHtml(t("chat.sourcesConsulted"))}:</p>`;
   if (parts.length === 0) {
@@ -779,15 +804,20 @@ function updateChatMeta(data) {
     html += `<div class="rail-tags">`;
     data.sources.forEach((src) => {
       if (src.type === "regulation") {
+        const hasClause = src.clause_id && !["unknown", "none", "null"].includes(String(src.clause_id).toLowerCase());
         const clause = escapeHtml(src.clause_id || "?");
         const page = escapeHtml(src.page_number || "?");
         const source = escapeHtml(src.source || t("chat.regulation"));
+        const section = escapeHtml(src.section_id || "?");
+        const label = hasClause
+          ? `${escapeHtml(t("chat.clause"))} ${clause}, ${escapeHtml(t("chat.page"))} ${page}`
+          : `${escapeHtml(src.standard_name || src.source || t("chat.regulation"))} — ${escapeHtml(t("chat.section"))} ${section}, ${escapeHtml(t("chat.page"))} ${page}`;
 
         html += `
           <span
             class="chat-source-tag regulation"
             title="${escapeHtml(t("chat.source"))}: ${source} | ${escapeHtml(t("chat.page"))} ${page}">
-            ${escapeHtml(t("chat.clause"))} ${clause}, ${escapeHtml(t("chat.page"))} ${page}
+            ${label}
           </span>
         `;
       } else if (src.type === "graph") {
@@ -799,6 +829,14 @@ function updateChatMeta(data) {
             class="chat-source-tag graph"
             title="${escapeHtml(t("chat.elementId"))}: ${elementId}">
             ${label}
+          </span>
+        `;
+      } else if (src.type === "sustainability") {
+        const runId = escapeHtml(src.id || "");
+        const projectId = escapeHtml(src.project_id || "");
+        html += `
+          <span class="chat-source-tag sustainability" title="${projectId}">
+            ${escapeHtml(t("chat.sourceSustainability"))} — ${runId}
           </span>
         `;
       }
@@ -938,8 +976,14 @@ uploadForm.addEventListener("submit", async (e) => {
     files.forEach((item) => formData.append("files", item));
   }
   const docId = document.getElementById("doc-id").value.trim();
+  const documentDomain = document.getElementById("document-domain").value;
+  const standardName = document.getElementById("standard-name").value.trim();
+  const standardVersion = document.getElementById("standard-version").value.trim();
   const uploadUrl = new URL("/api/rag/upload", window.location.origin);
   if (docId && files.length === 1) uploadUrl.searchParams.set("doc_id", docId);
+  uploadUrl.searchParams.set("document_domain", documentDomain);
+  if (standardName) uploadUrl.searchParams.set("standard_name", standardName);
+  if (standardVersion) uploadUrl.searchParams.set("standard_version", standardVersion);
 
   try {
     const response = await fetch(uploadUrl, {
@@ -971,6 +1015,9 @@ uploadForm.addEventListener("submit", async (e) => {
     dropZoneFile.textContent = "";
     dropZone.classList.remove("has-file");
     document.getElementById("doc-id").value = "";
+    document.getElementById("document-domain").value = "regulation";
+    document.getElementById("standard-name").value = "";
+    document.getElementById("standard-version").value = "";
 
     // Refresh corpus status if visible
     if (activeNav === "corpus") loadCorpusStatus();
@@ -1013,7 +1060,7 @@ async function loadCorpusStatus() {
         <div class="stored-file-row">
           <div class="stored-file-copy">
             <strong dir="auto">${escapeHtml(doc.filename)}</strong>
-            <span class="stored-file-meta">${Number(doc.chunk_count || 0)} ${escapeHtml(t("corpus.chunks"))} · ${Number(doc.page_count || 0)} ${escapeHtml(t("corpus.pages"))}${doc.ingested_at ? ` · ${escapeHtml(doc.ingested_at)}` : ""}</span>
+            <span class="stored-file-meta">${escapeHtml(doc.document_domain || "regulation")}${doc.standard_name ? ` · ${escapeHtml(doc.standard_name)} ${escapeHtml(doc.standard_version || "")}` : ""} · ${Number(doc.chunk_count || 0)} ${escapeHtml(t("corpus.chunks"))} · ${Number(doc.page_count || 0)} ${escapeHtml(t("corpus.pages"))}${doc.ingested_at ? ` · ${escapeHtml(doc.ingested_at)}` : ""}</span>
           </div>
           <span class="file-status status-indexed">${escapeHtml(t("corpus.indexed"))}</span>
         </div>`).join("")}</div>`;

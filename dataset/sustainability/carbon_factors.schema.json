@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BIM-Intellect carbon factor CSV row",
+  "type": "object",
+  "required": [
+    "factor_id", "material_id", "material_name", "aliases", "category",
+    "factor_value", "factor_unit", "region", "source", "source_version",
+    "year", "dataset_version", "notes", "enabled"
+  ],
+  "properties": {
+    "factor_id": {"type": "string", "minLength": 1},
+    "material_id": {"type": "string", "minLength": 1},
+    "material_name": {"type": "string", "minLength": 1},
+    "aliases": {"type": "string", "description": "Pipe-separated reviewed exact aliases"},
+    "category": {"type": "string", "minLength": 1},
+    "factor_value": {"type": "number", "minimum": 0},
+    "factor_unit": {"enum": ["kgCO2e/kg", "kgCO2e/m3", "kgCO2e/m2"]},
+    "region": {"type": "string", "minLength": 1},
+    "source": {"type": "string", "minLength": 1},
+    "source_version": {"type": "string", "minLength": 1},
+    "year": {"type": ["integer", "null"]},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "notes": {"type": "string"},
+    "enabled": {"type": "boolean"}
+  }
+}

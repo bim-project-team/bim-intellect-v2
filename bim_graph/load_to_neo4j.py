@@ -113,6 +113,11 @@ def load(nodes_csv=NODES_CSV, edges_csv=EDGES_CSV, reset=False, project_id=None)
             client.run("MATCH (n) DETACH DELETE n")
             print(f"[load] graph cleared.", flush=True)
         elif project_id:
+            # Sustainability evidence/results are derived from this exact
+            # project graph. Remove them before replacing Element nodes so a
+            # later query cannot return stale or orphaned carbon results.
+            from sustainability.repository import cleanup_project_sustainability
+            cleanup_project_sustainability(client, project_id)
             client.run(
                 "MATCH (e:Element {projectId: $project_id}) DETACH DELETE e",
                 {"project_id": project_id},

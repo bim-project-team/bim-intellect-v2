@@ -169,7 +169,7 @@ def test_rag_upload_accepts_single_and_multiple_files_under_plural_field(monkeyp
     monkeypatch.setattr(
         routes,
         "_RAG_CHUNKER",
-        lambda _path, doc_id, source: [{"id": f"{doc_id}-1", "source": source}],
+        lambda _path, doc_id, source, **_metadata: [{"id": f"{doc_id}-1", "source": source}],
     )
     monkeypatch.setattr(routes, "_RAG_EMBEDDER", {
         "delete_document": lambda _doc_id: 0,
