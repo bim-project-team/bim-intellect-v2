@@ -66,11 +66,12 @@ For stronger retrieval experiments, configure `BAAI/bge-m3` as the embedding mod
 2. The router independently selects regulation vector search, BIM graph retrieval, both, or neither.
 3. Regulation queries produce up to four semantic variants. Chroma retrieves 32 candidates per distinct query by default.
 4. Duplicate candidates merge by chunk ID. Multi-query hits and reciprocal ranks are retained.
-5. The default hybrid reranker combines dense similarity, Persian character n-gram TF-IDF relevance, and multi-query agreement. `RAG_RERANKER_PROVIDER=cross-encoder` enables the optional multilingual `BAAI/bge-reranker-v2-m3` second stage.
-6. Normal questions expand a configurable same-section neighbor window. Completeness requests expand the highest-ranked logical clauses, capped per section.
-7. Exact content hashes remove duplicate/overlapping text while preserving different continuation chunks.
-8. Context assembly ranks whole sections and stays within `RAG_MAX_CONTEXT_CHARS`. A relevant clause is kept together ahead of unrelated fragments.
-9. Weak semantic evidence triggers one bounded lexical fallback. There is no unbounded retry loop.
+5. The default hybrid reranker combines dense similarity, Persian character n-gram TF-IDF relevance, exact/overlapping heading relevance, explicit document-number relevance, and multi-query agreement. Deterministic typo and domain-synonym normalization is applied before retrieval. `RAG_RERANKER_PROVIDER=cross-encoder` enables the optional multilingual `BAAI/bge-reranker-v2-m3` second stage.
+6. Lexical candidates always join dense candidates before reranking; weak semantic evidence can trigger one bounded fallback pass. There is no unbounded retry loop.
+7. Completeness-sensitive questions expand the selected section hierarchy (parent plus children) or an inferred common parent for multiple matching leaves. Table sections are expanded as a unit. Ordinary questions use bounded neighbours from only the strongest three hits.
+8. Exact content hashes remove duplicate/overlapping text while preserving different continuation chunks. Context assembly ranks whole sections and stays within `RAG_MAX_CONTEXT_CHARS`.
+9. PDF ingestion keeps the original text chunks and adds structured table-grid chunks when PyMuPDF detects a table. Both use the same clause/page citation contract. Physical PDF page, detected printed page, PDF label, total PDF pages, parent section, document number, content kind, and table identity are stored separately.
+10. Page-count questions are answered from persisted PDF metadata, and conservative slash-decimal aliases are added alongside—not in place of—the citable source notation.
 
 The final prompt explicitly preserves separate list items for “all/complete/more” intent. All output citations must match retrieved `(clause_id, page_number)` pairs. Invalid citations trigger one repair call; an invalid repaired answer is withheld. If the model provider is unavailable, a bounded extractive response is returned from retrieved evidence rather than an API 500 or a fabricated answer.
 

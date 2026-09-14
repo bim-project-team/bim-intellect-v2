@@ -14,17 +14,24 @@ from sustainability.assessment import LeedAssessment, assess_available_evidence
 from sustainability.retriever import SustainabilityEvidence, SustainabilityEvidenceRetriever
 
 from .config import SETTINGS, ModelProfile, RAGSettings, get_model_profile
+from .chunker import persian_decimal_aliases
 from .memory import ConversationState, ConversationStore, conversation_store
 from .openrouter_client import LLMConfigError, LLMRequestError, call_with_retries, get_client
 from .prompts import (
     CITATION_REPAIR_PROMPT,
+    COMPLETENESS_REPAIR_PROMPT,
     COMBINE_PROMPT,
     CONVERSATION_PROMPT,
     QUERY_UNDERSTANDING_PROMPT,
     ROUTER_PROMPT,
 )
 from .retrieval import RegulationRetrieval, retrieve_regulations
-from .document_metadata import SUSTAINABILITY_DOCUMENT_DOMAINS, metadata_domain, normalize_domain_filter
+from .document_metadata import (
+    SUSTAINABILITY_DOCUMENT_DOMAINS, metadata_domain, normalize_domain_filter,
+    resolve_document_page_count,
+)
+from .embedder import list_indexed_documents
+from .reranker import Candidate, normalize_retrieval_query
 
 logger = logging.getLogger("bim_intellect.rag.orchestrator")
 
@@ -366,6 +373,143 @@ def sources_used_by_answer(answer: str, sources: list[dict]) -> list[dict]:
     ]
 
 
+_COMPLETENESS_PATTERN = re.compile(
+    r"(?:همه|تمام|کامل|جا\s*افتاده|ادامه|بیشتر|فهرست|چه\s+مواردی|چه\s+نکاتی|"
+    r"استاندارد(?:ها|هایی)|الزامات|گزینه(?:ها|هایی)|ابعاد|ردیف(?:ها|هایی)|"
+    r"\ball\b|\bcomplete\b|\bevery\b|\blist\b|\bstandards?\b|\brequirements?\b|\bdimensions?\b)",
+    re.IGNORECASE,
+)
+_NUMERIC_CLARIFICATION_PATTERN = re.compile(
+    r"(?:\d|[۰-۹٠-٩]).{0,30}(?:[؟?]{2,}|یعنی|درست|اشتباه|مطمئن|واقعاً|واقعا)",
+    re.IGNORECASE,
+)
+_LIST_ITEM_PATTERN = re.compile(
+    r"(?:^|\s)(?P<marker>الف|ب|پ|ت|ث|ج|چ|ح|خ|د|ذ|ر|ز|ژ|س|ش|ص|ض|ط|ظ|ع|غ|ف|ق|ک|گ|ل|م|ن|و|ه|ی)\s*[-–—]\s*(?P<body>.+)$"
+)
+
+
+def is_completeness_sensitive(question: str) -> bool:
+    return bool(_COMPLETENESS_PATTERN.search(normalize_retrieval_query(question)))
+
+
+@dataclass
+class CompletenessValidation:
+    requested: bool = False
+    expected_items: list[str] = field(default_factory=list)
+    covered_items: list[str] = field(default_factory=list)
+    missing_items: list[str] = field(default_factory=list)
+    complete_set_established: bool = False
+    valid: bool = True
+
+
+def _simple_terms(value: str) -> set[str]:
+    tokens = re.findall(
+        r"[A-Za-z]+(?:[.-]?\d+)*|[\u0600-\u06ff]+|\d+(?:[.-]\d+)*",
+        normalize_retrieval_query(value),
+    )
+    cleaned = {token.strip("،؛؟؍٫٬") for token in tokens}
+    return {
+        token for token in cleaned
+        if len(token) >= 3 and token not in {"برای", "مورد", "این", "باید", "باشد", "است"}
+    }
+
+
+def _completeness_items(query: str, chunks: list[Candidate]) -> list[tuple[str, str]]:
+    grouped: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    table_sections: set[tuple[str, str]] = set()
+    query_terms = _simple_terms(query)
+    for chunk in chunks:
+        section_key = (
+            str(chunk.metadata.get("document_id", "")),
+            str(chunk.metadata.get("section_id", "")),
+        )
+        items = grouped.setdefault(section_key, [])
+        table_json = str(chunk.metadata.get("table_data_json", ""))
+        if table_json:
+            try:
+                rows = json.loads(table_json)
+            except (TypeError, json.JSONDecodeError):
+                rows = []
+            if len(rows) >= 2:
+                table_sections.add(section_key)
+                width = max(len(row) for row in rows)
+                headers = [str(cell or f"Column {index + 1}") for index, cell in enumerate(rows[0])]
+                overlaps = [len(query_terms & _simple_terms(header)) for header in headers]
+                best = max(overlaps, default=0)
+                selected_columns = [
+                    index for index, overlap in enumerate(overlaps)
+                    if (best == 0 or overlap == best)
+                ]
+                standards_only = bool(re.search(r"(?:استاندارد|standard)", normalize_retrieval_query(query)))
+                for column in selected_columns:
+                    for row in rows[1:]:
+                        if column >= len(row) or not row[column]:
+                            continue
+                        value = str(row[column]).strip()
+                        if standards_only and not (re.search(r"[A-Za-z]", value) and re.search(r"\d", value)):
+                            continue
+                        items.append((value, "exact"))
+        for line in chunk.text.splitlines():
+            match = _LIST_ITEM_PATTERN.search(line)
+            if match:
+                items.append((f"{match.group('marker')}- {match.group('body').strip()}", "fuzzy"))
+    # Completeness applies to one coherent source enumeration, not every list
+    # that happened to enter neighbouring context. Prefer a table for explicit
+    # table/standards questions; otherwise use the largest substantial list.
+    table_query = bool(re.search(r"(?:جدول|ردیف|استاندارد|standards?|table|rows?)", query, re.IGNORECASE))
+    eligible = [
+        (key, values) for key, values in grouped.items()
+        if key in table_sections or len(values) >= 4
+    ]
+    if not eligible:
+        return []
+    if table_query and any(key in table_sections for key, _ in eligible):
+        eligible = [(key, values) for key, values in eligible if key in table_sections]
+    _, items = max(eligible, key=lambda pair: len(pair[1]))
+    deduplicated: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for label, kind in items:
+        key = re.sub(r"[\s._-]+", "", normalize_retrieval_query(label))
+        if key and key not in seen:
+            seen.add(key)
+            deduplicated.append((label, kind))
+    return deduplicated
+
+
+def validate_answer_completeness(
+    answer: str,
+    query: str,
+    chunks: list[Candidate],
+    requested: bool,
+) -> CompletenessValidation:
+    validation = CompletenessValidation(requested=requested)
+    if not requested:
+        return validation
+    items = _completeness_items(query, chunks)
+    validation.expected_items = [label for label, _ in items]
+    validation.complete_set_established = bool(items)
+    if not items:
+        return validation
+    compact_answer = re.sub(r"[\s._-]+", "", normalize_retrieval_query(answer))
+    answer_terms = _simple_terms(answer)
+    for label, kind in items:
+        compact_label = re.sub(r"[\s._-]+", "", normalize_retrieval_query(label))
+        # The source marker (الف، ب، ...) is structural and need not be repeated
+        # verbatim when the answer faithfully paraphrases the item body.
+        term_source = label.split("-", 1)[-1] if kind == "fuzzy" else label
+        terms = _simple_terms(term_source)
+        covered = compact_label in compact_answer
+        if kind == "fuzzy" and not covered:
+            threshold = min(2, len(terms))
+            covered = threshold > 0 and len(terms & answer_terms) >= threshold
+        if covered:
+            validation.covered_items.append(label)
+        else:
+            validation.missing_items.append(label)
+    validation.valid = not validation.missing_items
+    return validation
+
+
 _SUSTAINABILITY_NUMERIC_LINE = re.compile(
     r"(?:carbon|co2e|co₂e|factor|quantity|volume|area|mass|kg\b|m[²³23]\b|"
     r"کربن|ضریب|مقدار|حجم|مساحت|جرم|کیلوگرم|متر\s*(?:مربع|مکعب))",
@@ -618,6 +762,23 @@ class RAGOrchestrator:
         decision.setdefault("topic", state.topic or decision["standalone_query"][:160])
         if not isinstance(decision["retrieval_queries"], list):
             decision["retrieval_queries"] = [decision["standalone_query"]]
+        if is_completeness_sensitive(question):
+            decision["completeness_requested"] = True
+        corrected_query = normalize_retrieval_query(str(decision["standalone_query"]))
+        if corrected_query and corrected_query not in decision["retrieval_queries"]:
+            decision["retrieval_queries"].append(corrected_query)
+        if state.topic and _NUMERIC_CLARIFICATION_PATTERN.search(question):
+            decision["is_follow_up"] = True
+            decision["standalone_query"] = (
+                f"{state.topic}؛ رفع ابهام مقدار و واحد در پرسش پیگیری: {question}"
+            )
+            decision["retrieval_queries"] = [
+                decision["standalone_query"], normalize_retrieval_query(state.topic),
+            ]
+            if state.last_needs_vector is not None:
+                decision["needs_vector"] = state.last_needs_vector
+                decision["needs_graph"] = bool(state.last_needs_graph)
+                decision["needs_sustainability"] = bool(state.last_needs_sustainability)
         return decision
 
     def retrieve(self, understanding: dict) -> RetrievalResult:
@@ -785,7 +946,14 @@ class RAGOrchestrator:
                     citation = (
                         f"[Document {document_id}, Section {section_id}, Page {page}]"
                     )
-                parts.append(f"{chunk.text} {citation}")
+                rendered = chunk.text
+                aliases = persian_decimal_aliases(chunk.text)
+                if aliases:
+                    rendered += "\nتفسیر عددی قطعیِ نگارش منبع: " + "؛ ".join(
+                        f"{item['source']} {item['unit']} = {item['normalized']} {item['unit']}"
+                        for item in aliases
+                    )
+                parts.append(f"{rendered} {citation}")
         if retrieval.graph_context:
             parts.append(retrieval.graph_context)
         if retrieval.sustainability and retrieval.sustainability.available:
@@ -811,6 +979,26 @@ class RAGOrchestrator:
         response = call_with_retries(
             _chat_callable([{"role": "user", "content": prompt}], profile.final_model),
             op_name="citation repair",
+        )
+        return response.choices[0].message.content or ""
+
+    def _repair_completeness(
+        self,
+        answer: str,
+        question: str,
+        retrieval: RetrievalResult,
+        missing_items: list[str],
+        profile: ModelProfile,
+    ) -> str:
+        checklist = "\n".join(f"- {item}" for item in missing_items)
+        prompt = (
+            f"{COMPLETENESS_REPAIR_PROMPT}\n\nQuestion:\n{question}\n\n"
+            f"Missing checklist items:\n{checklist}\n\nEvidence:\n"
+            f"{retrieval.vector_context}\n\nDraft:\n{answer}"
+        )
+        response = call_with_retries(
+            _chat_callable([{"role": "user", "content": prompt}], profile.final_model),
+            op_name="answer completeness repair",
         )
         return response.choices[0].message.content or ""
 
@@ -842,6 +1030,42 @@ class RAGOrchestrator:
             )
         understanding["project_id"] = project_id
         understanding["file_ids"] = list(file_ids) if file_ids else None
+
+        metadata_answer = None
+        if source_override != "graph":
+            try:
+                metadata_answer = resolve_document_page_count(
+                    question, list_indexed_documents(self.settings)
+                )
+            except (LLMConfigError, LLMRequestError):
+                # An incompatible/empty index should continue through the normal
+                # fail-closed retrieval path with its existing clear diagnostics.
+                metadata_answer = None
+        if metadata_answer is not None:
+            answer = metadata_answer.answer
+            self.memory.append_turn(
+                state, question, answer,
+                topic=str(understanding.get("topic", "")),
+                needs_vector=False, needs_graph=False, needs_sustainability=False,
+            )
+            return {
+                "answer": answer,
+                "sources": [metadata_answer.source],
+                "used_vector": False,
+                "used_graph": False,
+                "used_sustainability": False,
+                "assessment": None,
+                "conversation_id": state.conversation_id,
+                "model_mode": profile.mode,
+                "router_model": profile.router_model,
+                "final_model": profile.final_model,
+                "rewritten_query": understanding["standalone_query"],
+                "retrieval_debug": {
+                    "intent": "document_metadata",
+                    "metadata_source": "pdf_total_page_count",
+                    "page_number_convention": "physical_pdf_page_1_based",
+                },
+            }
         logger.info(
             "RAG mode=%s router=%s final=%s original=%r rewritten=%r vector=%s graph=%s sustainability=%s domains=%s follow_up=%s complete=%s",
             profile.mode, profile.router_model, profile.final_model, question,
@@ -899,6 +1123,45 @@ class RAGOrchestrator:
             answer_sources: list[dict] = []
         else:
             answer_sources = sources_used_by_answer(answer, retrieval.sources)
+
+        completeness = validate_answer_completeness(
+            answer,
+            understanding["standalone_query"],
+            retrieval.regulation.chunks if retrieval.regulation else [],
+            bool(understanding.get("completeness_requested")),
+        )
+        if completeness.complete_set_established and not completeness.valid:
+            try:
+                repaired = canonicalize_generated_citations(self._repair_completeness(
+                    answer, question, retrieval, completeness.missing_items, profile,
+                ))
+                repaired_completeness = validate_answer_completeness(
+                    repaired,
+                    understanding["standalone_query"],
+                    retrieval.regulation.chunks if retrieval.regulation else [],
+                    True,
+                )
+                if (
+                    repaired_completeness.valid
+                    and validate_generated_answer(repaired, retrieval.sources, requires_citation)
+                ):
+                    answer = repaired
+                    completeness = repaired_completeness
+                    answer_sources = sources_used_by_answer(answer, retrieval.sources)
+            except (LLMConfigError, LLMRequestError) as exc:
+                logger.error("Completeness repair failed: %s", exc)
+        if completeness.complete_set_established and not completeness.valid:
+            extractive = canonicalize_generated_citations(self._extractive_answer(retrieval))
+            extractive_completeness = validate_answer_completeness(
+                extractive,
+                understanding["standalone_query"],
+                retrieval.regulation.chunks if retrieval.regulation else [],
+                True,
+            )
+            if validate_generated_answer(extractive, retrieval.sources, requires_citation):
+                answer = extractive
+                completeness = extractive_completeness
+                answer_sources = sources_used_by_answer(answer, retrieval.sources)
 
         sustainability_numbers_valid = (
             not understanding.get("needs_sustainability")
@@ -978,6 +1241,7 @@ class RAGOrchestrator:
             "graph": retrieval.graph_debug,
             "sustainability": retrieval.sustainability_debug,
             "assessment": retrieval.assessment.to_dict() if retrieval.assessment else None,
+            "completeness": asdict(completeness),
         })
         return {
             "answer": answer,

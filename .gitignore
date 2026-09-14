@@ -23,6 +23,11 @@ tests/*
 !tests/test_sustainability_phase1.py
 !tests/test_sustainability_leed_rag.py
 !tests/test_sustainability_phase3.py
+!tests/test_rag_retrieval_improvements.py
+!tests/test_chat_markdown_ui.py
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/rag_regression_benchmark.json
 
 # Environment variables
 .env

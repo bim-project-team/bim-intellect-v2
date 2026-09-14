@@ -1,0 +1,36 @@
+{
+  "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "credential_logged": false,
+  "results": [
+    {
+      "roles": ["standard_router", "standard_final"],
+      "model": "openai/gpt-4o-mini",
+      "http_status": 200,
+      "reached_openrouter": true,
+      "provider": "Azure",
+      "response": "OK",
+      "elapsed_ms": 1897.4,
+      "error": null
+    },
+    {
+      "roles": ["strong_router"],
+      "model": "google/gemini-2.5-flash",
+      "http_status": 200,
+      "reached_openrouter": true,
+      "provider": "Google",
+      "response": "OK",
+      "elapsed_ms": 939.1,
+      "error": null
+    },
+    {
+      "roles": ["strong_final"],
+      "model": "anthropic/claude-sonnet-4.5",
+      "http_status": 200,
+      "reached_openrouter": true,
+      "provider": "Amazon Bedrock",
+      "response": "OK",
+      "elapsed_ms": 2092.8,
+      "error": null
+    }
+  ]
+}

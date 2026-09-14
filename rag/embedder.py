@@ -139,7 +139,8 @@ def _embedding_text(chunk: Chunk) -> str:
     labels = [
         chunk.document_title or chunk.source, chunk.document_domain,
         chunk.standard_name, chunk.standard_version,
-        chunk.chapter, chunk.clause_id, chunk.heading,
+        chunk.document_number, chunk.chapter, chunk.clause_id, chunk.heading,
+        "structured table" if chunk.chunk_kind == "table" else "",
     ]
     prefix = " | ".join(str(value) for value in labels if value and value != "unknown")
     return f"{prefix}\n{chunk.text}" if prefix else chunk.text
@@ -153,10 +154,16 @@ def _metadata(chunk: Chunk, ingested_at: str = "") -> dict[str, Any]:
         "document_domain": chunk.document_domain or "regulation",
         "standard_name": chunk.standard_name or "",
         "standard_version": chunk.standard_version or "",
+        "document_number": chunk.document_number or "",
         "page_number": int(chunk.page_number),
+        "pdf_page_number": int(chunk.pdf_page_number or chunk.page_number),
+        "printed_page_number": int(chunk.printed_page_number or 0),
+        "pdf_page_label": chunk.pdf_page_label or "",
+        "total_pdf_pages": int(chunk.total_pdf_pages or 0),
         "clause_id": chunk.clause_id or "unknown",
         "chapter": chunk.chapter or "",
         "section_id": chunk.section_id or chunk.clause_id or "unknown",
+        "parent_section_id": chunk.parent_section_id or "",
         "heading": chunk.heading or "",
         "chunk_index": int(chunk.chunk_index),
         "section_chunk_index": int(chunk.section_chunk_index),
@@ -166,6 +173,11 @@ def _metadata(chunk: Chunk, ingested_at: str = "") -> dict[str, Any]:
         "next_section_chunk_id": chunk.next_section_chunk_id or "",
         "content_hash": chunk.content_hash or hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
         "is_toc": bool(chunk.is_toc),
+        "chunk_kind": chunk.chunk_kind or "text",
+        "table_id": chunk.table_id or "",
+        "table_row_count": int(chunk.table_row_count or 0),
+        "table_column_count": int(chunk.table_column_count or 0),
+        "table_data_json": chunk.table_data_json or "",
         "ingested_at": ingested_at,
     }
     # Chroma metadata values must be scalar and cannot be None.
@@ -288,6 +300,34 @@ def get_section_chunks(
     return sorted(records, key=lambda item: int(item["metadata"].get("section_chunk_index", 0)))
 
 
+def get_section_tree_chunks(
+    document_id: str,
+    section_id: str,
+    settings: RAGSettings = SETTINGS,
+) -> list[dict[str, Any]]:
+    """Return a logical section plus descendant clauses in document order."""
+    if not document_id or not section_id or section_id == "unknown":
+        return []
+    collection = get_or_create_collection(settings=settings)
+    result = collection.get(
+        where={"document_id": document_id},
+        include=["documents", "metadatas"],
+    )
+    prefix = section_id + "-"
+    records = [
+        {"id": chunk_id, "document": document, "metadata": metadata or {}}
+        for chunk_id, document, metadata in zip(
+            result.get("ids", []), result.get("documents", []), result.get("metadatas", [])
+        )
+        if str((metadata or {}).get("section_id", "")) == section_id
+        or str((metadata or {}).get("section_id", "")).startswith(prefix)
+    ]
+    return sorted(records, key=lambda item: (
+        int(item["metadata"].get("pdf_page_number", item["metadata"].get("page_number", 0))),
+        int(item["metadata"].get("chunk_index", 0)),
+    ))
+
+
 def get_all_chunks(
     limit: int | None = None,
     settings: RAGSettings = SETTINGS,
@@ -343,15 +383,27 @@ def list_indexed_documents(settings: RAGSettings = SETTINGS) -> list[dict[str, A
             "document_domain": metadata_domain(metadata),
             "standard_name": metadata.get("standard_name") or "",
             "standard_version": metadata.get("standard_version") or "",
+            "document_number": metadata.get("document_number") or "",
+            "total_pdf_pages": int(metadata.get("total_pdf_pages") or 0),
+            "printed_pages": set(),
         })
         item["chunk_count"] += 1
         if metadata.get("page_number"):
             item["pages"].add(int(metadata["page_number"]))
+        if metadata.get("printed_page_number"):
+            item["printed_pages"].add(int(metadata["printed_page_number"]))
+        item["total_pdf_pages"] = max(
+            int(item.get("total_pdf_pages") or 0), int(metadata.get("total_pdf_pages") or 0)
+        )
         if metadata.get("ingested_at") and not item.get("ingested_at"):
             item["ingested_at"] = metadata["ingested_at"]
     output = []
     for item in grouped.values():
         item["page_count"] = len(item.pop("pages"))
+        printed_pages = item.pop("printed_pages")
+        item["printed_page_range"] = (
+            [min(printed_pages), max(printed_pages)] if printed_pages else []
+        )
         output.append(item)
     return sorted(output, key=lambda item: str(item["filename"]).casefold())
 

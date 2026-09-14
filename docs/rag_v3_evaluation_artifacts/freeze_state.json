@@ -1,0 +1,56 @@
+{
+  "frozen_at_local": "2026-09-14",
+  "source_index": "C:\\Users\\CMG\\AppData\\Local\\Temp\\bim-intellect-rag-improved-v3",
+  "frozen_index": "C:\\Users\\CMG\\AppData\\Local\\Temp\\bim-intellect-rag-v3-eval-freeze-20260914",
+  "collection": "regulations_improved_v3",
+  "index_version": "3",
+  "file_count": 7,
+  "total_bytes": 33669227,
+  "git": {
+    "head": "0e6df73bf8280cdb188f8939349170d4c9f3386a",
+    "branch": "feature/sustainability",
+    "working_diff_sha1": "0174adfb58f074d2aaba464172710d5b55ddeeea",
+    "reference_tests": "142 passed, 3 skipped"
+  },
+  "manifest_sha256": "E54CAC05A4FD4FAD84432B0D6DA86EEDF82658EBCD910DCF8BE1C57AAC52B74B",
+  "effective_configuration": {
+    "candidate_count": 32,
+    "dense_weight": 0.45,
+    "document_weight": 0.05,
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "embedding_provider": "local",
+    "heading_weight": 0.2,
+    "lexical_pool_limit": 5000,
+    "lexical_weight": 0.25,
+    "max_context_chars": 28000,
+    "max_query_variants": 4,
+    "max_section_chunks": 24,
+    "multi_query_weight": 0.05,
+    "neighbor_window": 2,
+    "rerank_count": 10,
+    "reranker_provider": "hybrid",
+    "router_model": "openai/gpt-4o-mini",
+    "final_model": "openai/gpt-4o-mini",
+    "strong_router_model": "google/gemini-2.5-flash",
+    "strong_final_model": "anthropic/claude-sonnet-4.5",
+    "weak_relevance_threshold": 0.18
+  },
+  "configuration_file_sha256": {
+    "rag/config.py": "096B34A1B46F50A72DE1B690A9B5E9DE9A18B3A4F01A746E1739418AB6D8BD4F",
+    "rag/retrieval.py": "2F20D4AFF0FF39D1C188D3A92535F535CAD7062C6DBB4319F518B6C15FFDA622",
+    "rag/reranker.py": "73DE789C9B81A984BFD7256107F0259A7949F963C38280BD106C5C93D547B3CB",
+    "rag/orchestrator.py": "E248939F6A2FE164807F4D2B64EB6B5DAB89CB0033ACA9CDD27C2910978B407D",
+    "rag/chunker.py": "04FBFD05500AE7E049F936DDBA36899D50D301914D7EB87DE1254BBCA0499E6A",
+    ".env.example": "9F3F5F6ED69BB107EE842627CFB8D628A1A9F47A89E4548AFB2FA343AE497EB1",
+    "requirements.txt": "598165EDFFBE1580F7D66265F86C83E2C345D1EF80439C46292B56DB29EF1E6A"
+  },
+  "frozen_chroma_sha256": {
+    "chroma.sqlite3": "46BCA76B99CEBB051128B15FCC697CA4A854293400618835F75D7688040B2C17",
+    "manifest.json": "D52B57D557CF0D5AC337054AE80CD533DC33C97CB42FBFB9C7B073F2201DA264",
+    "data_level0.bin": "EFFD2F1DA813A9A9F68AE62D0D6533FF1239A7BD85296D7752E727EC26AC9F03",
+    "header.bin": "6D392BE0F23AA020B9000328EC304CC0551A931580A1F461B9F03AD81BE87E8F",
+    "index_metadata.pickle": "79E4E88AD6E0B8F9626B7FDF9F919EFB735613E3E6898A91405791E0984EA161",
+    "length.bin": "466F3501C58572DFD3E7C76EC1A0FF919CD046EAB73EAE54CAF7DD9F3310DDF7",
+    "link_lists.bin": "1C13663C1825817208CFCD8CFD717EC96E9A6A1346C2FB784E079C63BCC65C60"
+  }
+}

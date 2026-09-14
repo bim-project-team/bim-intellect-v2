@@ -428,17 +428,31 @@ function formatTime() {
   return new Date().toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
+function detectContentDirection(text) {
+  // Direction follows the dominant script in this value, not the UI locale.
+  // The shared detector ignores code, URLs, citations, and technical IDs.
+  return window.ChatMarkdown
+    ? window.ChatMarkdown.direction(text)
+    : (/[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]/u.test(String(text || "")) ? "rtl" : "ltr");
+}
+
+// Kept as a small compatibility helper for existing UI checks/callers.
 function containsRtlText(text) {
-  // Hebrew, Arabic, Arabic Supplement/Extended, and presentation forms.
-  // Persian code points are covered by these Unicode blocks.
-  return /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]/u.test(String(text || ""));
+  return detectContentDirection(text) === "rtl";
 }
 
 function applyTextDirection(element, text) {
-  const isRtl = containsRtlText(text);
-  element.dir = isRtl ? "rtl" : "ltr";
+  const direction = detectContentDirection(text);
+  const isRtl = direction === "rtl";
+  element.dir = direction;
   element.classList.toggle("rtl", isRtl);
   element.classList.toggle("ltr", !isRtl);
+}
+
+function resizeChatInput() {
+  chatInput.style.height = "auto";
+  chatInput.style.height = `${Math.min(chatInput.scrollHeight, 160)}px`;
+  chatInput.style.overflowY = chatInput.scrollHeight > 160 ? "auto" : "hidden";
 }
 
 function appendChatMessage(role, text, sources) {
@@ -452,8 +466,15 @@ function appendChatMessage(role, text, sources) {
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
   applyTextDirection(bubble, text);
-  // Preserve line breaks in assistant responses
-  bubble.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
+  if (role === "assistant" && window.ChatMarkdown) {
+    bubble.classList.add("markdown-body");
+    bubble.innerHTML = window.ChatMarkdown.render(text);
+  } else if (window.ChatMarkdown) {
+    bubble.innerHTML = window.ChatMarkdown.renderPlain(text);
+  } else {
+    // User messages and defensive fallback remain plain text.
+    bubble.textContent = text;
+  }
   msgDiv.appendChild(bubble);
 
   const meta = document.createElement("div");
@@ -467,6 +488,7 @@ function appendChatMessage(role, text, sources) {
     sources.forEach((src) => {
       const tag = document.createElement("span");
       tag.className = `chat-source-tag ${src.type || "regulation"}`;
+      tag.setAttribute("role", "note");
       if (src.type === "regulation") {
         const hasClause = src.clause_id && !["unknown", "none", "null"].includes(String(src.clause_id).toLowerCase());
         tag.textContent = hasClause
@@ -484,6 +506,9 @@ function appendChatMessage(role, text, sources) {
       } else if (src.type === "sustainability") {
         tag.textContent = `${t("chat.sourceSustainability")} — ${src.id || ""}`;
         tag.title = `${src.project_id || ""} | ${(src.file_ids || []).join(", ")}`;
+      } else if (src.type === "document_metadata") {
+        tag.textContent = `${src.source || t("chat.regulation")} — ${src.total_pdf_pages || "?"} pages`;
+        tag.title = `Physical PDF page count (${src.page_number_convention || "physical_pdf_page_1_based"})`;
       } else {
         tag.textContent = JSON.stringify(src);
       }
@@ -496,7 +521,17 @@ function appendChatMessage(role, text, sources) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-chatInput.addEventListener("input", () => applyTextDirection(chatInput, chatInput.value));
+chatInput.addEventListener("input", () => {
+  applyTextDirection(chatInput, chatInput.value);
+  resizeChatInput();
+});
+
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    chatForm.requestSubmit();
+  }
+});
 
 function showTypingIndicator() {
   const welcome = chatMessages.querySelector(".chat-welcome");
@@ -531,6 +566,7 @@ async function sendChat(question) {
   appendChatMessage("user", question);
   chatInput.value = "";
   applyTextDirection(chatInput, "");
+  resizeChatInput();
   chatInput.disabled = true;
   chatSend.disabled = true;
   showTypingIndicator();
@@ -641,6 +677,14 @@ function updateChatMeta(data) {
         html += `
           <span class="chat-source-tag sustainability" title="${projectId}">
             ${escapeHtml(t("chat.sourceSustainability"))} — ${runId}
+          </span>
+        `;
+      } else if (src.type === "document_metadata") {
+        const source = escapeHtml(src.source || t("chat.regulation"));
+        const total = escapeHtml(src.total_pdf_pages || "?");
+        html += `
+          <span class="chat-source-tag document-metadata" title="Physical PDF page count">
+            ${source} — ${total} pages
           </span>
         `;
       }

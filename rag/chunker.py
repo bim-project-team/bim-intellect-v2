@@ -73,6 +73,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pypdf import PdfReader
 
@@ -105,8 +106,10 @@ class Chunk:
     document_domain: str = "regulation"
     standard_name: str = ""
     standard_version: str = ""
+    document_number: str = ""
     chapter: str = ""
     section_id: str = ""
+    parent_section_id: str = ""
     heading: str = ""
     chunk_index: int = 0
     section_chunk_index: int = 0
@@ -116,6 +119,15 @@ class Chunk:
     next_section_chunk_id: str = ""
     content_hash: str = ""
     is_toc: bool = False
+    pdf_page_number: int = 0
+    printed_page_number: int = 0
+    pdf_page_label: str = ""
+    total_pdf_pages: int = 0
+    chunk_kind: str = "text"
+    table_id: str = ""
+    table_row_count: int = 0
+    table_column_count: int = 0
+    table_data_json: str = ""
 
 
 @dataclass
@@ -127,6 +139,33 @@ class PageDiagnostic:
     detected_clause_ids: list[str] = field(default_factory=list)
     extraction_error: str | None = None
     is_toc: bool = False
+    printed_page_number: int = 0
+    pdf_page_label: str = ""
+    table_count: int = 0
+
+
+@dataclass
+class ExtractedPage:
+    page_number: int
+    text: str
+    extraction_error: str | None = None
+    printed_page_number: int = 0
+    pdf_page_label: str = ""
+
+
+@dataclass
+class ExtractedTable:
+    page_number: int
+    table_index: int
+    rows: list[list[str]]
+
+    @property
+    def row_count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def column_count(self) -> int:
+        return max((len(row) for row in self.rows), default=0)
 
 
 @dataclass
@@ -244,6 +283,44 @@ def normalize_persian_text(text: str) -> str:
     text = re.sub(r"\n[ \t]+", "\n", text)
 
     return text
+
+
+_MEASUREMENT_UNIT_PATTERN = re.compile(
+    r"(?:میلی\s*متر|سانتی\s*متر|متر|کیلو\s*متر|درصد|سلسیوس|سانتی\s*گراد|"
+    r"درجه|ثانیه|کیلو\s*گرم|گرم|لیتر|لوکس|پاسکال|bar\b|mm\b|cm\b|m\b|%)",
+    re.IGNORECASE,
+)
+_PERSIAN_SLASH_DECIMAL_PATTERN = re.compile(
+    r"(?<![\d/])(?P<fraction>\d{1,4})\s*/\s*(?P<integer>\d{1,4})(?![\d/])"
+)
+
+
+def persian_decimal_aliases(text: str) -> list[dict[str, str]]:
+    """Resolve RTL slash-decimals only when a nearby measurement unit confirms intent.
+
+    In the source typography, ``38/0 متر`` represents ``0.38 متر`` and
+    ``5/2 متر بر ثانیه`` represents ``2.5 متر بر ثانیه``. Dates and standard
+    identifiers are intentionally excluded.
+    """
+    normalized_text = normalize_persian_text(text)
+    aliases: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _PERSIAN_SLASH_DECIMAL_PATTERN.finditer(normalized_text):
+        suffix = normalized_text[match.end():match.end() + 35]
+        unit_match = _MEASUREMENT_UNIT_PATTERN.search(suffix)
+        if not unit_match:
+            continue
+        fraction = match.group("fraction")
+        integer = str(int(match.group("integer")))
+        resolved = f"{integer}.{fraction}"
+        unit = re.sub(r"\s+", " ", unit_match.group(0)).strip()
+        raw = re.sub(r"\s+", "", match.group(0))
+        key = (raw, resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append({"source": raw, "normalized": resolved, "unit": unit})
+    return aliases
 
 
 # ============================================================================
@@ -385,7 +462,7 @@ def find_clause_matches(text: str, root: str | None) -> list[ClauseMatch]:
         for pattern in (standard, reversed_form):
             for m in pattern.finditer(text):
                 cid = canonicalize_clause_id(m.group(0), root)
-                if cid:
+                if cid and not _looks_like_standard_identifier(text, m.start()):
                     raw_matches.append((m.start(), m.end(), cid, m.group(0)))
     else:
         for m in _GENERIC_FALLBACK_PATTERN.finditer(text):
@@ -406,6 +483,23 @@ def find_clause_matches(text: str, root: str | None) -> list[ClauseMatch]:
         last_end = end
 
     return selected
+
+
+_STANDARD_IDENTIFIER_PREFIX = re.compile(
+    r"(?:ASME|ASTM|ISO|EN|BS|DIN|CSA|ISIRI|AWWA|ASSE|MSS|JIS)\s*(?:[A-Z]\s*)?$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_standard_identifier(text: str, start: int) -> bool:
+    """Do not interpret standards such as ASME16.1 as regulation clauses."""
+    if start > 0 and text[start - 1].isascii() and text[start - 1].isalpha():
+        return True
+    prefix = text[max(0, start - 24):start]
+    if re.search(r"(?:^|[\s,(])B\s*$", prefix, re.IGNORECASE):
+        return True
+    match = _STANDARD_IDENTIFIER_PREFIX.search(prefix)
+    return bool(match and "\n\n" not in match.group(0))
 
 
 def find_clause_ids(text: str, root: str | None) -> list[str]:
@@ -429,14 +523,29 @@ def guess_clause_id(text: str, root: str | None = None) -> str | None:
 # PDF EXTRACTION
 # ============================================================================
 
-def extract_text_by_page(pdf_path: str | Path) -> list[tuple[int, str, str | None]]:
-    """Returns (page_number, normalized_text, error) for every page.
+def _detect_printed_page_number(raw_text: str, physical_page: int, total_pages: int) -> int:
+    """Best-effort printed number from a standalone number near a page edge.
 
-    A page that fails to extract gets text="" and error=<message> instead
-    of silently disappearing into an empty string with no trace of why.
+    This is deliberately separate from the physical PDF index. A missing or
+    ambiguous printed number remains zero rather than being invented.
     """
+    normalized = normalize_persian_text(raw_text)
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    edge_lines = lines[:4] + lines[-4:]
+    for line in edge_lines:
+        if not re.fullmatch(r"\d{1,4}", line):
+            continue
+        value = int(line)
+        if 0 < value <= total_pages and value <= physical_page:
+            return value
+    return 0
+
+
+def _extract_pdf_pages(pdf_path: str | Path) -> list[ExtractedPage]:
     reader = PdfReader(str(pdf_path))
-    results: list[tuple[int, str, str | None]] = []
+    total_pages = len(reader.pages)
+    labels = list(reader.page_labels)
+    results: list[ExtractedPage] = []
 
     for page_number, page in enumerate(reader.pages, start=1):
         try:
@@ -446,9 +555,128 @@ def extract_text_by_page(pdf_path: str | Path) -> list[tuple[int, str, str | Non
             raw = ""
             error = str(exc)
             logger.warning("Page %d: text extraction failed: %s", page_number, exc)
-        results.append((page_number, normalize_persian_text(raw), error))
-
+        results.append(ExtractedPage(
+            page_number=page_number,
+            text=normalize_persian_text(raw),
+            extraction_error=error,
+            printed_page_number=_detect_printed_page_number(raw, page_number, total_pages),
+            pdf_page_label=str(labels[page_number - 1]) if page_number <= len(labels) else "",
+        ))
     return results
+
+
+def extract_text_by_page(pdf_path: str | Path) -> list[tuple[int, str, str | None]]:
+    """Returns (page_number, normalized_text, error) for every page.
+
+    A page that fails to extract gets text="" and error=<message> instead
+    of silently disappearing into an empty string with no trace of why.
+    """
+    return [
+        (page.page_number, page.text, page.extraction_error)
+        for page in _extract_pdf_pages(pdf_path)
+    ]
+
+
+def _logical_table_cell(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    # PyMuPDF exposes Persian table cells in visual order. python-bidi is a
+    # transitive dependency in the current stack; the simple reverse fallback
+    # keeps table ingestion available if it is absent.
+    if re.search(r"[\u0600-\u06ff]", text):
+        try:
+            from bidi.algorithm import get_display
+            text = get_display(text)
+        except ImportError:  # pragma: no cover - dependency/environment specific
+            text = text[::-1]
+    return normalize_persian_text(text).strip()
+
+
+def extract_tables_by_page(pdf_path: str | Path) -> dict[int, list[ExtractedTable]]:
+    """Extract ruled tables as cell grids while retaining plain-text fallback."""
+    try:
+        import fitz
+    except ImportError:  # pragma: no cover - optional backwards-compatible path
+        logger.warning("PyMuPDF is unavailable; continuing without table-aware chunks.")
+        return {}
+
+    document = fitz.open(str(pdf_path))
+    output: dict[int, list[ExtractedTable]] = {}
+    try:
+        for page_index, page in enumerate(document, start=1):
+            try:
+                detected = page.find_tables()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Page %d: table detection failed: %s", page_index, exc)
+                continue
+            for table_index, table in enumerate(detected.tables):
+                rows = [
+                    [_logical_table_cell(cell) for cell in row]
+                    for row in table.extract()
+                ]
+                rows = [row for row in rows if any(row)]
+                nonempty = sum(bool(cell) for row in rows for cell in row)
+                if len(rows) < 2 or table.col_count < 2 or nonempty < 4:
+                    continue
+                output.setdefault(page_index, []).append(ExtractedTable(
+                    page_number=page_index,
+                    table_index=table_index,
+                    rows=rows,
+                ))
+    finally:
+        document.close()
+    return output
+
+
+def _table_text_parts(table: ExtractedTable, chunk_size: int) -> list[str]:
+    width = table.column_count
+    padded = [row + [""] * (width - len(row)) for row in table.rows]
+    headers = [cell or f"Column {index + 1}" for index, cell in enumerate(padded[0])]
+    header_line = "Table columns: " + " | ".join(
+        f"{index + 1}={header}" for index, header in enumerate(headers)
+    )
+    row_lines = []
+    for row_index, row in enumerate(padded[1:], start=1):
+        values = " | ".join(
+            f"{headers[index]}={cell}" for index, cell in enumerate(row) if cell
+        )
+        if values:
+            row_lines.append(f"Table row {row_index}: {values}")
+    if not row_lines:
+        row_lines = ["Table row 1: " + " | ".join(padded[0])]
+
+    parts: list[str] = []
+    current = header_line
+    for line in row_lines:
+        proposed = f"{current}\n{line}"
+        if len(proposed) <= chunk_size or current == header_line:
+            current = proposed
+        else:
+            parts.append(current)
+            current = f"{header_line}\n{line}"
+    if current:
+        parts.append(current)
+    return parts
+
+
+def _table_section(table: ExtractedTable, segments: list[tuple[str, str]]) -> str:
+    tokens = set(re.findall(r"[A-Za-z]+\d[\w.-]*|\d+[\w.-]+", " ".join(
+        cell for row in table.rows for cell in row
+    )))
+    best_clause = ""
+    best_overlap = -1
+    for clause_id, segment_text in segments:
+        overlap = sum(token in segment_text for token in tokens)
+        if overlap > best_overlap:
+            best_clause, best_overlap = clause_id, overlap
+    return best_clause
+
+
+def _parent_section_id(section_id: str) -> str:
+    parts = section_id.split("-")
+    return "-".join(parts[:-1]) if len(parts) > 2 else ""
 
 
 # ============================================================================
@@ -631,6 +859,7 @@ def chunk_pdf(
     document_domain: str = "regulation",
     standard_name: str = "",
     standard_version: str = "",
+    document_number: str = "",
 ) -> list[Chunk]:
     """Backwards-compatible entry point: returns just the chunk list.
 
@@ -646,6 +875,7 @@ def chunk_pdf(
         document_domain=document_domain,
         standard_name=standard_name,
         standard_version=standard_version,
+        document_number=document_number,
     ).chunks
 
 
@@ -661,6 +891,7 @@ def chunk_pdf_with_diagnostics(
     document_domain: str = "regulation",
     standard_name: str = "",
     standard_version: str = "",
+    document_number: str = "",
 ) -> ChunkResult:
     """
     Extract, detect the clause root (unless `chapter_id` is given to
@@ -669,8 +900,13 @@ def chunk_pdf_with_diagnostics(
     """
     source = source or doc_id
     classification = classify_document(document_domain, standard_name, standard_version)
+    if not document_number:
+        document_match = re.match(r"^\s*(\d{1,2})(?:\D|$)", source)
+        document_number = document_match.group(1) if document_match else ""
 
-    pages = extract_text_by_page(pdf_path)
+    extracted_pages = _extract_pdf_pages(pdf_path)
+    tables_by_page = extract_tables_by_page(pdf_path)
+    total_pdf_pages = len(extracted_pages)
 
     if chapter_id is not None:
         root: str | None = str(chapter_id)
@@ -680,8 +916,8 @@ def chunk_pdf_with_diagnostics(
         # numbers) don't skew detection of the document's real clause
         # numbering scheme.
         non_appendix_texts = [
-            text for _, text, _ in pages
-            if not APPENDIX_PATTERN.search(text[:500])
+            page.text for page in extracted_pages
+            if not APPENDIX_PATTERN.search(page.text[:500])
         ]
         root = detect_clause_root(non_appendix_texts)
 
@@ -690,7 +926,10 @@ def chunk_pdf_with_diagnostics(
     counter = 0
     current_clause_id: str | None = None
 
-    for page_number, page_text, extraction_error in pages:
+    for extracted_page in extracted_pages:
+        page_number = extracted_page.page_number
+        page_text = extracted_page.text
+        extraction_error = extracted_page.extraction_error
         if page_number < min_page:
             continue
 
@@ -705,6 +944,9 @@ def chunk_pdf_with_diagnostics(
                 clause_match_found=False,
                 detected_clause_ids=[],
                 extraction_error=extraction_error,
+                printed_page_number=extracted_page.printed_page_number,
+                pdf_page_label=extracted_page.pdf_page_label,
+                table_count=len(tables_by_page.get(page_number, [])),
             ))
             continue
 
@@ -718,7 +960,7 @@ def chunk_pdf_with_diagnostics(
             page_text,
             segment_clause_ids,
             page_number,
-            len(pages),
+            total_pdf_pages,
         )
 
         for segment_clause_id, segment_text in segments:
@@ -746,11 +988,58 @@ def chunk_pdf_with_diagnostics(
                     document_domain=classification.document_domain,
                     standard_name=classification.standard_name,
                     standard_version=classification.standard_version,
+                    document_number=document_number,
                     chapter=(cid.split("-")[0] if cid else (root or "")),
                     section_id=section_id,
+                    parent_section_id=_parent_section_id(section_id) if cid else "",
                     heading=heading,
                     content_hash=hashlib.sha256(normalize_persian_text(piece).encode("utf-8")).hexdigest(),
                     is_toc=page_is_toc,
+                    pdf_page_number=page_number,
+                    printed_page_number=extracted_page.printed_page_number,
+                    pdf_page_label=extracted_page.pdf_page_label,
+                    total_pdf_pages=total_pdf_pages,
+                ))
+                counter += 1
+
+        for table in tables_by_page.get(page_number, []):
+            table_clause_id = _table_section(table, segments) or current_clause_id or ""
+            table_section_id = table_clause_id or f"page-{page_number}"
+            table_id = f"{doc_id}-p{page_number}-table{table.table_index}"
+            table_json = json.dumps(table.rows, ensure_ascii=False, separators=(",", ":"))
+            table_heading = next((cell for cell in table.rows[0] if cell), "Extracted table")
+            for table_part_index, table_text in enumerate(_table_text_parts(table, chunk_size)):
+                result_chunks.append(Chunk(
+                    chunk_id=f"{table_id}-part{table_part_index}",
+                    text=table_text,
+                    page_number=page_number,
+                    clause_id=table_clause_id or None,
+                    source=source,
+                    document_id=doc_id,
+                    document_title=source,
+                    document_domain=classification.document_domain,
+                    standard_name=classification.standard_name,
+                    standard_version=classification.standard_version,
+                    document_number=document_number,
+                    chapter=(table_clause_id.split("-")[0] if table_clause_id else (root or "")),
+                    section_id=table_section_id,
+                    parent_section_id=(
+                        _parent_section_id(table_section_id) if table_clause_id else ""
+                    ),
+                    heading=table_heading[:200],
+                    content_hash=hashlib.sha256(
+                        normalize_persian_text(table_text).encode("utf-8")
+                    ).hexdigest(),
+                    is_toc=page_is_toc,
+                    pdf_page_number=page_number,
+                    printed_page_number=extracted_page.printed_page_number,
+                    pdf_page_label=extracted_page.pdf_page_label,
+                    total_pdf_pages=total_pdf_pages,
+                    chunk_kind="table",
+                    table_id=table_id,
+                    table_row_count=table.row_count,
+                    table_column_count=table.column_count,
+                    table_data_json=table_json,
                 ))
                 counter += 1
 
@@ -762,6 +1051,9 @@ def chunk_pdf_with_diagnostics(
             detected_clause_ids=segment_clause_ids,
             extraction_error=extraction_error,
             is_toc=page_is_toc,
+            printed_page_number=extracted_page.printed_page_number,
+            pdf_page_label=extracted_page.pdf_page_label,
+            table_count=len(tables_by_page.get(page_number, [])),
         ))
 
     _finalize_chunk_links(result_chunks)

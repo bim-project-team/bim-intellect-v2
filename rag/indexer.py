@@ -17,6 +17,10 @@ from .document_metadata import classify_document
 
 logger = logging.getLogger("bim_intellect.rag.indexer")
 
+# Confirmed font-map anomaly in the Mabhas 12 source. Do not generalize this
+# correction: Mabhas 24 intentionally uses internal clause root 42.
+_KNOWN_CLAUSE_ROOT_CORRECTIONS = {("12", "01"): "12"}
+
 
 def _file_hash(path: Path) -> str:
     digest = hashlib.sha256()
@@ -99,6 +103,7 @@ def build_index(
             document_domain=classification.document_domain,
             standard_name=classification.standard_name,
             standard_version=classification.standard_version,
+            document_number=filename_chapter.group(1) if filename_chapter else "",
         )
         # Some Persian PDF fonts extract the visible chapter number with an
         # incorrect glyph mapping (the Mabhas 12 corpus yields root "01").
@@ -107,16 +112,20 @@ def build_index(
         # that root segment for truthful user-facing clause citations.
         canonical_chapter = filename_chapter.group(1) if filename_chapter else None
         extracted_root = result.detected_clause_root
-        if canonical_chapter and extracted_root and canonical_chapter != extracted_root:
+        corrected_root = _KNOWN_CLAUSE_ROOT_CORRECTIONS.get(
+            (canonical_chapter or "", extracted_root or "")
+        )
+        if corrected_root:
             logger.warning(
                 "Mapping extracted clause root %s to filename chapter %s for %s",
-                extracted_root, canonical_chapter, pdf_path.name,
+                extracted_root, corrected_root, pdf_path.name,
             )
             for chunk in result.chunks:
                 if chunk.clause_id and chunk.clause_id.startswith(f"{extracted_root}-"):
-                    chunk.clause_id = f"{canonical_chapter}-{chunk.clause_id[len(extracted_root) + 1:]}"
+                    chunk.clause_id = f"{corrected_root}-{chunk.clause_id[len(extracted_root) + 1:]}"
                     chunk.section_id = chunk.clause_id
-                    chunk.chapter = canonical_chapter
+                    chunk.parent_section_id = "-".join(chunk.section_id.split("-")[:-1])
+                    chunk.chapter = corrected_root
         indexed = embed_and_store(result.chunks, settings=settings)
         manifest["chunk_count"] += indexed
         manifest["documents"].append({
@@ -131,6 +140,15 @@ def build_index(
             "unlabeled_chunks": result.unlabeled_chunk_count,
             "toc_chunks": sum(chunk.is_toc for chunk in result.chunks),
             "extraction_error_pages": result.pages_with_errors,
+            "tables": sum(page.table_count for page in result.pages),
+            "printed_page_range": (
+                [
+                    min(page.printed_page_number for page in result.pages if page.printed_page_number),
+                    max(page.printed_page_number for page in result.pages if page.printed_page_number),
+                ]
+                if any(page.printed_page_number for page in result.pages) else []
+            ),
+            "page_number_convention": "physical_pdf_page_1_based",
             "document_domain": classification.document_domain,
             "standard_name": classification.standard_name,
             "standard_version": classification.standard_version,

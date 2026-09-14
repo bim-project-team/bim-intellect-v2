@@ -4,7 +4,7 @@
    Design constants kept from the original theme:
      · strictly black & white, no accent colour
      · zero border radius (sharp, print-like edges)
-     · serif display type + monospace for data/technical values
+     · restrained sans-serif UI type + monospace for data/technical values
      · the square monogram mark
 
    Layout: persistent left sidebar (Claude/ChatGPT style) + centred chat.
@@ -36,20 +36,23 @@
   --danger-soft: #faf1f1;
   --radius: 0;
 
-  --font-display: Georgia, "Times New Roman", serif;
+  --font-display: "Inter", Arial, sans-serif;
+  --font-chat-latin: "Inter", Arial, sans-serif;
+  --font-persian: "Noto Sans Arabic", Tahoma, Arial, sans-serif;
   --font-mono: "JetBrains Mono", "Courier New", monospace;
 
   --sidebar-w: 264px;
   --rail-w: 300px;
-  --measure: 46rem;
+  --measure: 52rem;
+  --reading-measure: 46rem;
 
   --shadow-panel: 4px 4px 0 rgba(17, 17, 17, 0.06);
 }
 
-/* Persian switches the whole type stack to Vazirmatn. */
+/* Persian uses a neutral UI typeface with complete Persian glyph coverage. */
 html[lang="fa"],
 html[lang="fa"] body {
-  --font-display: "Vazirmatn", Georgia, serif;
+  --font-display: var(--font-persian);
 }
 
 html,
@@ -69,7 +72,7 @@ body {
 
 /* Persian text needs a little more leading to stay legible. */
 html[lang="fa"] body {
-  line-height: 1.85;
+  line-height: 1.9;
 }
 
 h1, h2, h3, h4 {
@@ -321,7 +324,7 @@ html[dir="rtl"] .sidebar.open {
 
 /* Persian label inside the switcher uses the Persian face. */
 .lang-btn[data-lang="fa"] {
-  font-family: "Vazirmatn", var(--font-mono);
+  font-family: var(--font-persian);
 }
 
 .sidebar-meta {
@@ -797,28 +800,37 @@ select[multiple] {
 }
 
 .chat-bubble {
-  font-size: 0.95rem;
-  line-height: 1.7;
+  font-family: var(--font-chat-latin);
+  font-size: 1rem;
+  line-height: 1.78;
   overflow-wrap: anywhere;
   unicode-bidi: plaintext;
 }
 
 .chat-bubble.rtl {
+  font-family: var(--font-persian);
+  font-size: 1.015rem;
+  line-height: 1.95;
+  letter-spacing: 0;
   direction: rtl;
   text-align: right;
 }
 
 .chat-bubble.ltr {
+  font-family: var(--font-chat-latin);
   direction: ltr;
   text-align: left;
 }
 
 #chat-input.rtl {
+  font-family: var(--font-persian);
   direction: rtl;
   text-align: right;
+  letter-spacing: 0;
 }
 
 #chat-input.ltr {
+  font-family: var(--font-chat-latin);
   direction: ltr;
   text-align: left;
 }
@@ -829,6 +841,7 @@ select[multiple] {
   background: var(--surface-dark);
   color: var(--bg);
   border: 1px solid var(--border);
+  white-space: pre-wrap;
 }
 
 /* Assistant answers read as a document, not a bubble. */
@@ -838,6 +851,239 @@ select[multiple] {
   background: none;
   color: var(--fg);
   border: none;
+}
+
+/* --- Model-answer Markdown --- */
+
+.markdown-body {
+  min-width: 0;
+  color: var(--fg);
+}
+
+.markdown-body > :first-child {
+  margin-block-start: 0;
+}
+
+.markdown-body > :last-child {
+  margin-block-end: 0;
+}
+
+.md-paragraph,
+.md-list,
+.md-blockquote {
+  max-width: var(--reading-measure);
+}
+
+.md-paragraph {
+  margin-block: 0 1rem;
+  text-wrap: pretty;
+}
+
+.md-heading {
+  max-width: var(--reading-measure);
+  margin-block: 1.8rem 0.65rem;
+  font-family: var(--font-display);
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+.md-heading[dir="rtl"] {
+  font-family: var(--font-persian);
+  letter-spacing: 0;
+  line-height: 1.65;
+}
+
+.markdown-body [dir="rtl"] {
+  font-family: var(--font-persian);
+  text-align: right;
+  letter-spacing: 0;
+}
+
+.markdown-body [dir="ltr"] {
+  font-family: var(--font-chat-latin);
+  text-align: left;
+}
+
+.markdown-body .md-inline-code,
+.markdown-body .md-code-block,
+.markdown-body .md-code-block code,
+.markdown-body .md-citation,
+.markdown-body .md-ltr-token,
+.chat-msg.user .md-ltr-token {
+  font-family: var(--font-mono);
+}
+
+.md-ltr-token {
+  display: inline;
+  unicode-bidi: isolate;
+  font-size: 0.9em;
+  letter-spacing: 0;
+}
+
+.md-number {
+  white-space: nowrap;
+}
+
+.md-h1 {
+  padding-block-end: 0.55rem;
+  border-block-end: 1px solid var(--border-light);
+  font-size: clamp(1.35rem, 2vw, 1.62rem);
+}
+
+.md-h2 {
+  font-size: clamp(1.17rem, 1.7vw, 1.35rem);
+}
+
+.md-h3 {
+  font-size: 1.06rem;
+  color: var(--fg-muted);
+}
+
+.md-list {
+  margin-block: 0.35rem 1.15rem;
+  padding-inline-start: 1.6rem;
+}
+
+.md-list li {
+  margin-block: 0.34rem;
+  padding-inline-start: 0.2rem;
+}
+
+.md-list li::marker {
+  color: var(--fg-light);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+}
+
+.md-blockquote {
+  margin: 1.15rem 0;
+  padding: 0.25rem 1rem;
+  border-inline-start: 3px solid var(--border-light);
+  color: var(--fg-muted);
+  background: var(--surface);
+}
+
+.md-paragraph,
+.md-list,
+.md-blockquote,
+.md-heading {
+  margin-inline-end: auto;
+}
+
+.md-blockquote .md-paragraph:last-child {
+  margin-block-end: 0;
+}
+
+.md-inline-code,
+.md-code-block,
+.md-citation,
+.md-link[href] {
+  unicode-bidi: isolate;
+}
+
+.md-inline-code {
+  padding: 0.08em 0.32em;
+  border: 1px solid var(--border-faint);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  white-space: break-spaces;
+}
+
+.md-code-block {
+  max-width: 100%;
+  margin: 1rem 0 1.25rem;
+  padding: 1rem 1.1rem;
+  overflow: auto;
+  border: 1px solid #2d2d2d;
+  background: #171717;
+  color: #ededed;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.7;
+  tab-size: 2;
+  text-align: left;
+  white-space: pre;
+}
+
+.md-code-block code {
+  font: inherit;
+}
+
+.md-link {
+  color: var(--fg);
+  text-decoration-color: var(--fg-light);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.md-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.md-citation {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin-inline: 0.12rem;
+  padding: 0.08rem 0.36rem;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  font-weight: 500;
+  line-height: 1.55;
+  vertical-align: 0.08em;
+  white-space: normal;
+}
+
+.md-table-wrap {
+  max-width: 100%;
+  margin: 1rem 0 1.35rem;
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  -webkit-overflow-scrolling: touch;
+}
+
+.md-table {
+  width: 100%;
+  min-width: 32rem;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
+.md-table th,
+.md-table td {
+  padding: 0.65rem 0.75rem;
+  border-inline-end: 1px solid var(--border-faint);
+  border-block-end: 1px solid var(--border-faint);
+  text-align: start;
+  vertical-align: top;
+}
+
+.md-table th {
+  background: var(--surface);
+  font-weight: 650;
+}
+
+.md-table tr:last-child td {
+  border-block-end: 0;
+}
+
+.md-table [data-align="center"] { text-align: center; }
+.md-table [data-align="end"] { text-align: end; }
+.md-table [data-align="start"] { text-align: start; }
+
+.md-divider {
+  margin-block: 1.6rem;
+  border: 0;
+  border-block-start: 1px solid var(--border-light);
 }
 
 .chat-meta-line {
@@ -868,16 +1114,19 @@ select[multiple] {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  margin-block-start: 0.6rem;
+  margin-block-start: 0.9rem;
+  padding-block-start: 0.65rem;
+  border-block-start: 1px solid var(--border-faint);
 }
 
 .chat-source-tag {
-  padding: 0.12rem 0.4rem;
+  max-width: 100%;
+  padding: 0.17rem 0.45rem;
   border: 1px solid var(--border-light);
   background: var(--bg);
   color: var(--fg-muted);
   font-family: var(--font-mono);
-  font-size: 0.67rem;
+  font-size: 0.65rem;
   white-space: nowrap;
   /* Citations are structured identifiers — keep them LTR in both locales. */
   direction: ltr;
@@ -885,8 +1134,15 @@ select[multiple] {
 }
 
 .chat-source-tag.regulation {
-  border-color: var(--border);
+  border-color: var(--border-light);
   color: var(--fg);
+}
+
+html[lang="fa"] .chat-meta-line,
+html[lang="fa"] .composer-hint {
+  font-family: var(--font-persian);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .chat-source-tag.graph {
@@ -1018,7 +1274,7 @@ html[dir="rtl"] .example-q::before {
   max-width: var(--measure);
   margin-inline: auto;
   display: flex;
-  align-items: stretch;
+  align-items: flex-end;
   gap: 0;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -1029,29 +1285,36 @@ html[dir="rtl"] .example-q::before {
   box-shadow: 0 0 0 2px var(--border);
 }
 
-.chat-form input[type="text"] {
+.chat-form textarea {
   flex: 1;
   min-width: 0;
+  min-height: 3.45rem;
+  max-height: 10rem;
   border: none;
   background: none;
-  padding: 0.85rem 1rem;
-  font-family: var(--font-display);
-  font-size: 0.95rem;
+  padding: 0.82rem 1rem;
+  font-family: var(--font-chat-latin);
+  font-size: clamp(1rem, 0.96rem + 0.25vw, 1.1rem);
+  line-height: 1.7;
+  resize: none;
+  overflow-y: hidden;
 }
 
-.chat-form input[type="text"]:focus {
+.chat-form textarea:focus {
   outline: none;
   box-shadow: none;
 }
 
-.chat-form input::placeholder {
+.chat-form textarea::placeholder {
   color: var(--fg-light);
-  font-style: italic;
+  font-style: normal;
+  opacity: 0.9;
 }
 
 #chat-send {
   flex-shrink: 0;
-  width: 3rem;
+  width: 3.45rem;
+  height: 3.45rem;
   display: grid;
   place-items: center;
   background: var(--surface-dark);
@@ -1898,6 +2161,8 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
   font-size: 0.74rem;
   direction: ltr;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .quality-grid {
@@ -2034,6 +2299,25 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 
   .chat-messages {
     padding-inline: 1rem;
+  }
+
+  .chat-msg.user .chat-bubble {
+    max-width: 92%;
+  }
+
+  .chat-form textarea {
+    font-size: 1rem;
+    line-height: 1.65;
+    padding-block: 0.86rem;
+  }
+
+  .md-code-block {
+    padding: 0.8rem;
+    font-size: 0.76rem;
+  }
+
+  .md-table {
+    min-width: 28rem;
   }
 
   .composer-shell {

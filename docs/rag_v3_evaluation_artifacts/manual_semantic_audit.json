@@ -1,0 +1,92 @@
+{
+  "audit_date": "2026-09-14",
+  "basis": "Manual semantic review of the preserved raw JSON outputs; no queries were rerun and no RAG code or index was changed.",
+  "measurement_notes": {
+    "fully_correct": "Answers the requested question correctly, without a material omission.",
+    "factual_support": "Material claims are supported by the retrieved evidence, even if the answer is incomplete or poorly formatted.",
+    "structural_citation_correctness": "The production validator accepts every emitted citation as a member of the current request sources.",
+    "semantic_citation_correctness": "The cited evidence actually supports the answer's material claims.",
+    "unsupported_claim": "At least one material claim is not supported by the retrieved evidence. Automatic numeric flags were not used because they include list ordinals, document numbers, citation numbers, and evidence-reconstruction misses.",
+    "negative_case_correction": "A clear refusal does not require a citation. The raw detector incorrectly required citation_valid=true and missed some longer Persian refusal phrasings."
+  },
+  "main_benchmark": {
+    "standard": {
+      "fully_correct_cases": 5,
+      "total_cases": 9,
+      "fully_correct_rate": 0.5556,
+      "material_claims_supported_cases": 7,
+      "material_claims_supported_rate": 0.7778,
+      "unsupported_claim_cases": 2,
+      "unsupported_claim_rate": 0.2222,
+      "structural_citation_correctness": 1.0,
+      "semantic_citation_correctness_regulation_cases": 0.75,
+      "exact_target_section_mean_citation_completeness": 0.6875,
+      "cases": {
+        "machine_room": {"status": "partial", "supported": true, "complete": false, "citation_semantic": true, "note": "Four of seven required dimensions/rules were stated; 700 mm, 500x600 mm, and the shared-room rule were omitted despite being in final context."},
+        "stair_depth": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned 0.38 m with the correct clause/page; did not repeat the source notation or cm equivalent."},
+        "vacuum_breaker": {"status": "fail", "supported": false, "complete": false, "citation_semantic": false, "note": "Answered with an unrelated falling-tools barrier from Mabhas 12."},
+        "flange": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned all three cast-iron standards and the table's other supported flange rows."},
+        "site_coverage": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned all four child requirements from the exact heading."},
+        "page_count": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Deterministic metadata answer: 55 physical PDF pages."},
+        "electrical_complete": {"status": "partial", "supported": true, "complete": true, "citation_semantic": true, "note": "All 15 target items survived, but citation-repair failure forced a very long raw extractive fallback instead of a usable enumeration."},
+        "call_system": {"status": "fail", "supported": false, "complete": false, "citation_semantic": false, "note": "Used generic placement/overload prose and did not answer the target call-system requirements."},
+        "site_exact_heading": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Exact heading and all four children were answered."}
+      }
+    },
+    "strong": {
+      "fully_correct_cases": 6,
+      "total_cases": 9,
+      "fully_correct_rate": 0.6667,
+      "material_claims_supported_cases": 8,
+      "material_claims_supported_rate": 0.8889,
+      "unsupported_claim_cases": 1,
+      "unsupported_claim_rate": 0.1111,
+      "structural_citation_correctness": 1.0,
+      "semantic_citation_correctness_regulation_cases": 0.875,
+      "exact_target_section_mean_citation_completeness": 0.6875,
+      "cases": {
+        "machine_room": {"status": "partial", "supported": true, "complete": false, "citation_semantic": true, "note": "Gemini's rewrite caused clause 15-2-2-5-2 to leave final context; Claude correctly disclosed that the exact table was unavailable, but returned only one of seven required facts."},
+        "stair_depth": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned source notation 38/0 and normalized 0.38 m with the correct citation."},
+        "vacuum_breaker": {"status": "fail", "supported": false, "complete": false, "citation_semantic": false, "note": "Gemini mistranslated the term as expansion joint; retrieval missed Mabhas 16 and Claude incorrectly said the term was absent."},
+        "flange": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned all three rows and retained table context."},
+        "site_coverage": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned all four child requirements."},
+        "page_count": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Deterministic metadata answer: 55 physical PDF pages."},
+        "electrical_complete": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Returned the complete 15-item inspection list directly."},
+        "call_system": {"status": "partial", "supported": true, "complete": false, "citation_semantic": true, "note": "The high-level definition was grounded, but the answer omitted the specific 15-2-5-6 content and cited only parent/general clauses."},
+        "site_exact_heading": {"status": "pass", "supported": true, "complete": true, "citation_semantic": true, "note": "Exact heading and all four children were answered."}
+      }
+    }
+  },
+  "negative_benchmark": {
+    "standard": {
+      "clear_insufficient_evidence": 3,
+      "total": 3,
+      "correct_insufficient_rate": 1.0,
+      "hallucination_rate": 0.0,
+      "invented_citation_rate": 0.0,
+      "unsupported_numeric_claim_rate": 0.0,
+      "note": "Two requests ended in the fail-closed citation-suppression message; the third explicitly named missing evidence."
+    },
+    "strong": {
+      "clear_insufficient_evidence": 3,
+      "total": 3,
+      "correct_insufficient_rate": 1.0,
+      "hallucination_rate": 0.0,
+      "invented_citation_rate": 0.0,
+      "unsupported_numeric_claim_rate": 0.0,
+      "extraneous_supported_numeric_examples_rate": 0.6667,
+      "unsupported_non_numeric_claim_rate": 0.3333,
+      "note": "All three explicitly said the requested fact was absent. Two included unnecessary but retrieved numeric examples; the hydrogen answer also suggested the wrong chapter for mechanical systems."
+    }
+  },
+  "completeness_benchmark": {
+    "standard": {"all_three_target_rows_rate": 0.6, "no_missing_rows_when_successful": true, "invented_target_rows": 0, "header_or_category_context_retained_rate": 0.6},
+    "strong": {"all_three_target_rows_rate": 0.4, "no_missing_rows_when_successful": true, "invented_target_rows": 0, "header_or_category_context_retained_rate": 0.4, "extraneous_standard_like_token_free_rate": 0.2},
+    "note": "Strong's extra standards were generally present in unrelated retrieved appendix/prose evidence rather than fabricated, but they were wrong for the target table."
+  },
+  "follow_up_benchmark": {
+    "standard": {"subject_section_retention_rate": 0.25, "numeric_final_correct": false, "flange_final_complete": false},
+    "strong": {"subject_section_retention_rate": 0.5, "numeric_final_correct": true, "flange_final_complete": false},
+    "note": "Both routers kept the linguistic topic, but only Strong retained the correct stair evidence on the disbelief turn. Both flange conversations drifted to the standards appendix and failed the complete-table requirement."
+  }
+}

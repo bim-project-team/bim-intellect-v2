@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "page_number_convention": "physical PDF page, 1-based; printed_page is recorded separately when detected",
+  "cases": [
+    {
+      "id": "elevator_machine_room_dimensions",
+      "question": "در مورد ابعاد موتورخانه آسانسور راهنماییم کن",
+      "expected_document": "15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "expected_sections": ["15-2-2-5", "15-2-2-5-1", "15-2-2-5-2", "15-2-2-5-3"],
+      "expected_physical_pages": [31],
+      "expected_printed_pages": [21],
+      "required_facts": ["700 میلی متر", "400 میلی متر", "500 میلی متر", "2000 میلی متر", "300 میلی متر", "500 × 600 میلی متر", "موتورخانه مشترک"],
+      "complete_enumeration": true,
+      "allowed_wording_variation": "Persian paraphrase is allowed; every supported dimension and the shared-machine-room rule must remain distinct."
+    },
+    {
+      "id": "minimum_stair_depth",
+      "question": "What is the minimum landing depth for stairs according to Mabhas 15?",
+      "expected_document": "15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "expected_sections": ["15-3-5-9"],
+      "expected_physical_pages": [57],
+      "expected_printed_pages": [47],
+      "required_facts": ["38/0 متر", "0.38 متر", "38 سانتی متر"],
+      "complete_enumeration": false,
+      "allowed_wording_variation": "The source notation and deterministic normalized interpretation may be stated together."
+    },
+    {
+      "id": "vacuum_breaker_definition",
+      "question": "خلا شکن چیه؟",
+      "expected_document": "16 - v4-1396 - تاسیسات بهداشتی.pdf",
+      "expected_sections": ["16-1"],
+      "expected_physical_pages": [29],
+      "expected_printed_pages": [13],
+      "required_facts": ["مانع جریان برگشت", "فشار اتمسفر", "وارد کردن هوا"],
+      "complete_enumeration": false,
+      "allowed_wording_variation": "A concise Persian definition is allowed; no unsupported contamination claim."
+    },
+    {
+      "id": "cast_iron_flange_standards",
+      "question": "استاندرادهایی که برای انتخاب فلنچ چدنی باید بدونیم چیا هستند",
+      "expected_document": "16 - v4-1396 - تاسیسات بهداشتی.pdf",
+      "expected_sections": ["16-3-4-5"],
+      "expected_physical_pages": [69, 70, 72],
+      "expected_printed_pages": [53, 54, 56],
+      "required_facts": ["EN1092-2", "ISO7005-2", "ASME16.1"],
+      "complete_enumeration": true,
+      "allowed_wording_variation": "Spacing around standard codes may vary; ASME16.1 must not be reduced to ASME or treated as clause 16-1."
+    },
+    {
+      "id": "site_coverage_floor_area",
+      "question": "در مورد سطح اشغال و زیربنا در کدام مبحث مقررات ملی ساختمان صحبت شده و چه نکاتی گفته شده؟",
+      "expected_document": "24 - v1-1404 - انطباق شهری ساختمان.pdf",
+      "expected_sections": ["42-2-3-4", "42-2-3-4-1", "42-2-3-4-2", "42-2-3-4-3", "42-2-3-4-4"],
+      "expected_physical_pages": [38],
+      "expected_printed_pages": [31],
+      "required_facts": ["حداقل فضای باز", "حداقل زیربنای مجاز", "بافت کالبدی همجوار", "دانه بندی بافت پیرامون"],
+      "complete_enumeration": true,
+      "allowed_wording_variation": "Clause IDs must retain the PDF's internal root 42 even though the document is Mabhas 24."
+    },
+    {
+      "id": "document_page_count",
+      "question": "مبحث ۲۴ چند صفحه است؟",
+      "expected_document": "24 - v1-1404 - انطباق شهری ساختمان.pdf",
+      "expected_sections": [],
+      "expected_physical_pages": [],
+      "required_facts": ["55 صفحه فیزیکی PDF"],
+      "complete_enumeration": false,
+      "metadata_question": true,
+      "allowed_wording_variation": "Must come from total PDF metadata and must not cite a highest retrieved chunk."
+    },
+    {
+      "id": "electrical_visual_inspection_complete",
+      "question": "بازدید عینی از تأسیسات برقی شامل چه مواردی است؟",
+      "expected_document": "22 - v1-1392 - مراقبت و نگهداری.pdf",
+      "expected_sections": ["22-7-7"],
+      "expected_physical_pages": [67, 68],
+      "required_facts": ["الف", "ب", "پ", "ت", "ث", "ج", "چ", "ح", "خ", "د", "ذ", "ر", "ز", "ژ", "س"],
+      "complete_enumeration": true,
+      "allowed_wording_variation": "All 15 source items must be represented; paraphrase is allowed."
+    },
+    {
+      "id": "stair_numeric_follow_up",
+      "conversation": [
+        "What is the minimum landing depth for stairs according to Mabhas 15?",
+        "عمق پله؟",
+        "۳۸ متر؟؟؟"
+      ],
+      "expected_document": "15 - v3-1392 - آسانسورها و پلکان برقی.pdf",
+      "expected_sections": ["15-3-5-9"],
+      "required_facts": ["38/0 متر", "0.38 متر", "نه 38 متر"],
+      "complete_enumeration": false,
+      "follow_up": true,
+      "allowed_wording_variation": "The third turn must be understood as a numeric/unit clarification of the stair-depth topic."
+    }
+  ]
+}

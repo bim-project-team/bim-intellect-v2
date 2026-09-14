@@ -51,6 +51,12 @@ clause use [Document <DOCUMENT-ID>, Section <SECTION>, Page <PAGE>]. Copy all fi
 translate or invent them. Remove unsupported claims and invented citations. Preserve all distinct
 requirements when the user requested completeness. Return only the corrected answer in the user's language."""
 
+COMPLETENESS_REPAIR_PROMPT = """Revise the draft so it covers every item in the supplied deterministic completeness checklist.
+Use only the supplied SOURCE evidence. Preserve exact standard codes and numeric values. Every documentary claim must carry
+an immediately adjacent valid citation copied from its SOURCE block. If an item cannot be supported, name that exact item
+and say that it cannot be established; never use an ambiguous phrase such as "this requirement". Return only the corrected
+answer in the user's language."""
+
 ROUTER_PROMPT = """You are a bilingual Persian/English query router for a BIM and engineering knowledge system.
 Determine which sources could provide useful evidence for the user's question.
 Route by the likely source of the answer, not merely by words explicitly used
@@ -222,7 +228,9 @@ Instructions:
 5. If both sources are provided, synthesize them: explain what the regulation requires and how the building data relates to it (compliance, violations, counts, etc.).
 6. If a required fact, number, dimension, threshold, or technical requirement is not explicitly present in the provided context, do not guess or infer it. State that the information is not specified in the retrieved context.
 7. If only one source was retrieved, answer only from that source. Do not speculate about information that might exist in the other source.
-8. Every numeric value in the answer must appear verbatim in the provided context. Do not substitute, approximate, convert, or infer numeric values.
+8. Every numeric value in the answer must appear verbatim in the provided context. A value may be normalized only when the
+   same SOURCE block supplies an explicit "Deterministic numeric interpretations" alias; state the original notation and
+   normalized value together. Do not perform any other substitution, approximation, conversion, or inference.
 
 8a. Carbon quantities, factors, totals, and kgCO2e values may be copied only from the deterministic sustainability context. Never calculate them. Model-profile choice cannot change them.
 
@@ -235,8 +243,9 @@ Instructions:
 
 11. If the context contains conflicting values, report the conflict and cite the relevant clauses. Do not choose a value silently.
 
-12. If the retrieved context does not explicitly support the requested requirement, say:
-   "اطلاعات کافی برای این الزام در بخش‌های بازیابی‌شده وجود ندارد."
+12. If the retrieved context does not explicitly support a requested requirement, identify the exact missing item or
+   sub-question. For example: "برای «حداقل عرض در» اطلاعات کافی در بخش‌های بازیابی‌شده وجود ندارد." Never say only
+   "this requirement" or append an unexplained generic insufficient-evidence sentence.
 
 13. Use only the regulation context for regulatory requirements. Do not use general model knowledge or building graph context to fill in missing regulation values.
 13a. Keep documentary requirements separate from project assessment. Use only these assessment states: satisfied_from_available_evidence, not_satisfied_from_available_evidence, insufficient_evidence, not_automatically_evaluable. Do not claim LEED Certified, Silver, Gold, Platinum, a credit award, or certification eligibility.
@@ -245,5 +254,7 @@ Instructions:
 16. For a follow-up requesting more, prioritize material omitted from the previous answer, but retain enough organization to make the continuation understandable.
 17. Each SOURCE block deterministically exposes Document, Clause, Page, Section, Chunk-ID, and Text. Clause and Page are
 metadata, not prose to infer. The only valid regulatory citation rendered to the user remains [Clause <clause_id>, Page <page_number>].
+18. Content-Type table blocks are cell-preserving structured extraction. Read each header/value relationship explicitly;
+    do not tell the user to inspect the table manually. For a completeness request, include every relevant table value.
 User Question: {question}
 """

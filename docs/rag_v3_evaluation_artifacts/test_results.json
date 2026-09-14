@@ -1,0 +1,18 @@
+{
+  "date": "2026-09-14",
+  "environment_note": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 was required because a globally installed Hydra/OmegaConf pytest plugin failed during startup with an incompatible ANTLR runtime. This happened before project test collection.",
+  "focused": {
+    "command": "pytest -q tests/test_rag_retrieval_improvements.py tests/test_rag_v2.py tests/test_multifile_workflows.py",
+    "result": "70 passed, 6 warnings",
+    "duration_seconds": 61.39,
+    "junit": "focused_rag_junit.xml"
+  },
+  "full": {
+    "command": "pytest -q",
+    "result": "143 passed, 2 skipped, 6 warnings",
+    "duration_seconds": 75.36,
+    "junit": "full_regression_junit.xml",
+    "reference": "142 passed, 3 skipped",
+    "regressions": 0
+  }
+}
