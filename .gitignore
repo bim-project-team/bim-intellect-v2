@@ -20,6 +20,10 @@ tests/*
 !tests/test_multifile_workflows.py
 !tests/test_graph_query_planner.py
 !tests/test_graph_retrieval_regression.py
+!tests/test_scene_export.py
+!tests/test_visualization_scope.py
+!tests/test_model_scene_api.py
+!tests/test_answer_visualization.py
 !tests/test_sustainability_phase1.py
 !tests/test_sustainability_leed_rag.py
 !tests/test_sustainability_phase3.py
@@ -42,6 +46,9 @@ ifc_types.csv
 *.ifc
 dataset/ifc/project_registry.json
 
+# Generated 3D viewer geometry (rebuilt by the ingest pipeline; ~88MB per model)
+dataset/ifc/scenes/
+
 # PDF and ZIP files
 *.pdf
 *.zip
@@ -61,3 +68,6 @@ pytest.ini
 *.ini
 
 opencode.json
+
+BIM-Intelligence-Implementation-Scope-3D-visualization.md
+bim-intellect-sources/

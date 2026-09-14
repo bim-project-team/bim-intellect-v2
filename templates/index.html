@@ -15,7 +15,19 @@
     rel="stylesheet"
   />
 
-  <link rel="stylesheet" href="/static/style.css?v=11" />
+  <link rel="stylesheet" href="/static/style.css?v=12" />
+
+  <!-- three.js ships as ESM and its addons import the bare specifier "three".
+       This map resolves those to the vendored copy under /static/vendor, so the
+       viewer works with no bundler and no CDN at runtime. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/static/vendor/three/three.module.min.js",
+        "three/addons/": "/static/vendor/three/addons/"
+      }
+    }
+  </script>
 </head>
 <body>
 
@@ -117,6 +129,14 @@
             <span data-i18n="status.ready">Ready</span>
           </span>
 
+          <!-- Opens the 3D map. Chat-only, and only enabled once an answer has
+               identified elements to show. -->
+          <button class="rail-toggle" id="viewer-toggle"
+                  aria-controls="viewer-panel" aria-expanded="false"
+                  data-i18n-title="viewer.title" title="3D map" disabled>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </button>
+
           <!-- Opens the analysis-context drawer. Chat-only, like the toggle above. -->
           <button class="rail-toggle" id="rail-toggle"
                   aria-controls="context-rail" aria-expanded="false"
@@ -211,6 +231,29 @@
                 Send a message to see which retrieval paths the orchestrator selects.
               </p>
             </div>
+          </aside>
+
+          <!-- 3D map. A drawer like the context rail, so opening it never
+               reflows the chat column mid-conversation. -->
+          <aside class="viewer-panel" id="viewer-panel" aria-label="3D map">
+            <div class="rail-header">
+              <h3 data-i18n="viewer.title">3D map</h3>
+              <div class="viewer-header-actions">
+                <button class="btn-icon" id="viewer-reset" data-i18n-title="viewer.reset" title="Reset view">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 10 9 10"/></svg>
+                </button>
+                <button class="drawer-close" id="viewer-close" data-i18n-title="common.close" title="Close">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="viewer-stage">
+              <canvas id="viewer-canvas"></canvas>
+              <p class="viewer-placeholder" id="viewer-placeholder" data-i18n="viewer.empty">
+                Ask about elements in the model to see them here.
+              </p>
+            </div>
+            <div class="viewer-footer" id="viewer-footer"></div>
           </aside>
 
         </section>
@@ -630,9 +673,13 @@
     </div>
   </div>
 
-  <script src="/static/i18n.js?v=3"></script>
+  <script src="/static/i18n.js?v=4"></script>
   <script src="/static/chat-markdown.js?v=1"></script>
-  <script src="/static/app.js?v=11"></script>
+  <!-- Module, because three.js is ESM. Publishes window.bimViewer for app.js.
+       Deferred by nature, so app.js (classic) may load first; app.js therefore
+       treats the viewer as optional rather than assuming it exists. -->
+  <script type="module" src="/static/viewer.js?v=1"></script>
   <script src="/static/sustainability.js?v=1"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

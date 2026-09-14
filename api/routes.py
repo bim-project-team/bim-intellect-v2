@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, BeforeValidator
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -38,6 +38,10 @@ from bim_graph import load_to_neo4j, clash_pipeline
 from extract_graph import run_extraction
 from extract_graph import run_multi_extraction
 from bim_graph.coordinate_system import inspect_coordinate_system, validate_federation
+from bim_graph.scene_export import (
+    SCENES_ROOT, UNASSIGNED_SCENE_KEY, ifc_bbox_to_gltf, prune_manifest,
+    read_manifest, scene_key as scene_key_for, scene_path,
+)
 from bim_graph.project_registry import (
     PROJECT_ROOT, get_files, list_projects, register_uploaded_file, safe_id,
     update_file, utc_now, list_unregistered_ifc_files,
@@ -107,6 +111,8 @@ class QuestionRequest(BaseModel):
     conversation_id: Optional[str] = None
     use_strong_models: bool = False
     selected_element_id: Optional[str] = None
+    # Scopes sustainability evidence lookups and the answer's 3D visualization
+    # to one project.
     project_id: Optional[str] = None
     file_ids: Optional[List[str]] = None
 
@@ -117,6 +123,9 @@ class ProjectIngestRequest(BaseModel):
     types: Optional[List[str]] = None
     reset_all: bool = False
     run_clash_detection: bool = True
+    # glTF scene export for the 3D viewer, produced from the tessellation the
+    # bounding-box pass already performs. Disable to import graph data only.
+    build_scenes: bool = True
 
 
 # ------------------------------------------------------------------
@@ -387,6 +396,7 @@ def ingest_ifc_project(project_id: str, req: ProjectIngestRequest):
             nodes, edges, per_file = run_multi_extraction(
                 records, nodes_csv=NODES_CSV, edges_csv=EDGES_CSV,
                 storey_filter=req.storeys, type_filter=req.types,
+                build_scenes=req.build_scenes,
             )
             successful_ids = {item["file_id"] for item in per_file if item["status"] == "processed"}
             if not successful_ids:
@@ -418,12 +428,20 @@ def ingest_ifc_project(project_id: str, req: ProjectIngestRequest):
                 for record in records:
                     if record["file_id"] in successful_ids:
                         update_file(project_id, record["file_id"], processing_status="analyzed", analyzed_at=utc_now())
+            # Keep the viewer's manifest honest: a file dropped from the graph
+            # must stop being offered as viewable geometry, or the 3D map would
+            # show a model the answers can no longer reason about.
+            prune_manifest(
+                project_id,
+                [item["file_id"] for item in get_files(project_id) if item.get("status") == "ingested"],
+            )
             return {
                 "status": "ok" if len(successful_ids) == len(records) else "partial_success",
                 "project_id": project_id, "alignment": alignment,
                 "files": get_files(project_id, req.file_ids), "per_file": per_file,
                 "extracted_nodes": len(nodes), "extracted_edges": len(edges),
                 "load_summary": load_summary, "analysis": analysis,
+                "scenes": read_manifest(project_id),
             }
         except HTTPException:
             raise
@@ -593,6 +611,157 @@ def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = Non
     except Exception as e:
         print(f"[routes] /issues failed: {e}", file=sys.stderr)
         return []
+
+
+# ------------------------------------------------------------------
+# 3D model scenes for the viewer
+# ------------------------------------------------------------------
+
+ELEMENTS_BY_SCENE_QUERY = """
+MATCH (e:Element)
+WHERE e.minX IS NOT NULL
+  AND ($project_id IS NULL OR e.projectId = $project_id)
+  AND (size($file_ids) = 0 OR e.sourceFileId IN $file_ids)
+  AND (
+    NOT $filter_storeys
+    OR e.storeyName IN $storey_names
+    OR ($include_unassigned AND (e.storeyName IS NULL OR e.storeyName = ""))
+  )
+  AND (size($ifc_types) = 0 OR e.ifcType IN $ifc_types)
+RETURN e.id AS element_id, coalesce(e.ifcGuid, e.id) AS ifc_guid,
+       e.name AS name, e.ifcType AS ifc_type, e.storeyName AS storey_name,
+       e.minX AS min_x, e.minY AS min_y, e.minZ AS min_z,
+       e.maxX AS max_x, e.maxY AS max_y, e.maxZ AS max_z
+ORDER BY e.ifcType, e.name
+LIMIT $limit
+"""
+
+
+def _scene_scope(project_id: str, scene_keys: List[str], file_ids: List[str] | None = None) -> dict:
+    """Translate viewer scene keys into graph filter parameters.
+
+    Scene keys are hashes of storey names, so the manifest holds the only reverse
+    mapping. Three cases must stay distinct, because conflating them silently
+    returns the wrong geometry:
+
+    - no keys requested        -> no storey restriction at all
+    - a key for a real storey  -> match that storey name
+    - the "unassigned" key     -> match elements with no storey, which is 1,392
+      elements in the reference model (every IfcSpace plus unhosted terminals);
+      matching them by name is impossible because they have none
+    """
+    if not scene_keys:
+        return {"filter_storeys": False, "storey_names": [], "include_unassigned": False}
+
+    wanted = set(scene_keys)
+    names: List[str] = []
+    include_unassigned = UNASSIGNED_SCENE_KEY in wanted
+    wanted_files = set(file_ids or [])
+    for manifest_file_id, entry in read_manifest(project_id).get("files", {}).items():
+        entry_file_id = entry.get("file_id") or manifest_file_id
+        if wanted_files and entry_file_id not in wanted_files:
+            continue
+        for scene in entry.get("scenes", []):
+            if scene.get("scene_key") not in wanted:
+                continue
+            name = scene.get("storey_name") or ""
+            if name and name not in names:
+                names.append(name)
+    return {
+        "filter_storeys": True,
+        "storey_names": names,
+        "include_unassigned": include_unassigned,
+    }
+
+
+@router.get("/model/manifest")
+def get_model_manifest(project_id: str = Query(..., description="Project whose exported scenes to list")):
+    """Scenes available for a project, so the viewer knows what it can load."""
+    return read_manifest(safe_id(project_id))
+
+
+@router.get("/model/scene/{project_id}/{file_id}/{scene_key}")
+def get_model_scene(project_id: str, file_id: str, scene_key: str):
+    """Serve one storey's glTF binary.
+
+    Every path segment is normalized through safe_id and the resolved path is
+    asserted to stay inside SCENES_ROOT, so a crafted key cannot read outside the
+    scene directory.
+    """
+    key = safe_id(scene_key.removesuffix(".glb"), fallback="")
+    if not key:
+        raise HTTPException(400, "Invalid scene key.")
+    path = scene_path(safe_id(project_id), safe_id(file_id), key).resolve()
+    root = SCENES_ROOT.resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(404, "Scene not found. Re-run project ingestion with scene export enabled.")
+    return FileResponse(
+        path,
+        media_type="model/gltf-binary",
+        # Content-addressed by ingestion: a re-import writes a new manifest, and
+        # the viewer only requests scenes listed there.
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/model/elements")
+def get_model_elements(
+    project_id: str = Query(..., description="Project to read elements from"),
+    scene_key: Optional[List[str]] = Query(None, description="Repeatable: restrict to these scenes"),
+    ifc_type: Optional[List[str]] = Query(None, description="Repeatable: restrict to these IFC types"),
+    file_id: Optional[List[str]] = Query(None, description="Repeatable: restrict to selected IFC files"),
+    limit: int = Query(2000, ge=1, le=20000),
+):
+    """Element identities and bounding boxes for the viewer.
+
+    Serves two purposes: framing the camera before a glTF finishes parsing, and
+    the box fallback for projects that have graph data but no exported scenes.
+    """
+    normalized_project = safe_id(project_id)
+    normalized_file_ids = [
+        normalized for value in (file_id or [])
+        if (normalized := safe_id(value, fallback=""))
+    ]
+    parameters = {
+        "project_id": normalized_project,
+        "file_ids": normalized_file_ids,
+        "ifc_types": [value for value in (ifc_type or []) if value],
+        "limit": limit,
+        **_scene_scope(normalized_project, scene_key or [], normalized_file_ids),
+    }
+    try:
+        with Neo4jClient() as client:
+            records = client.run(ELEMENTS_BY_SCENE_QUERY, parameters)
+    except Exception as exc:
+        print(f"[routes] /model/elements failed: {exc}", file=sys.stderr)
+        raise HTTPException(503, "Building graph is unavailable.")
+
+    elements = []
+    for record in records:
+        minimum, maximum = ifc_bbox_to_gltf(
+            record["min_x"], record["min_y"], record["min_z"],
+            record["max_x"], record["max_y"], record["max_z"],
+        )
+        elements.append({
+            "element_id": record["element_id"],
+            "ifc_guid": record["ifc_guid"],
+            "name": record["name"],
+            "ifc_type": record["ifc_type"],
+            "storey_name": record["storey_name"],
+            # The server owns the storey-to-scene mapping, so the client can pick
+            # which scenes to load without reimplementing the key derivation.
+            "scene_key": scene_key_for(record["storey_name"]),
+            # Pre-converted to the viewer's frame so the client never has to know
+            # the IFC axis convention.
+            "min": minimum,
+            "max": maximum,
+        })
+    return {
+        "project_id": normalized_project,
+        "count": len(elements),
+        "truncated": len(elements) >= limit,
+        "elements": elements,
+    }
 
 
 # ------------------------------------------------------------------
@@ -810,7 +979,7 @@ def ask(req: QuestionRequest):
             req.question,
             conversation_id=req.conversation_id,
             use_strong_models=req.use_strong_models,
-            project_id=req.project_id,
+            project_id=safe_id(req.project_id) if req.project_id else None,
             file_ids=req.file_ids,
         )
     except Exception as exc:

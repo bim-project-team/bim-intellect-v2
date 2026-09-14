@@ -22,6 +22,7 @@ from bim_graph.cypher_generator import CypherGenerator
 from bim_graph.cypher_templates import try_template_match
 from bim_graph.neo4j_client import Neo4jClient
 from bim_graph.query_planner import GraphQueryPlan, missing_result_columns, plan_graph_question
+from bim_graph.visualization import harvest_elements, looks_like_element_node
 
 logger = logging.getLogger("bim_intellect.graph_retriever")
 
@@ -63,6 +64,7 @@ class GraphRetriever:
         parameters = plan.parameters if plan else {}
         executed_queries = [cypher]
         follow_up_required = False
+        elements: List[Dict[str, Any]] = []
 
         try:
             with Neo4jClient() as client:
@@ -123,6 +125,7 @@ class GraphRetriever:
                         f"Query parameters: {json.dumps(parameters, ensure_ascii=False)}\n"
                         f"Completeness validation: complete\n{context}"
                     )
+                elements = self._resolve_elements(records, plan, parameters, client)
         except Exception as exc:
             logger.error("Cypher execution failed: %s | Query: %s", exc, cypher[:200])
             raise RuntimeError(f"Graph query execution failed: {exc}") from exc
@@ -141,8 +144,40 @@ class GraphRetriever:
             "cypher_queries": executed_queries,
             "context": context,
             "sources": sources,
+            "elements": elements,
             "record_count": len(records),
         }
+
+    def _resolve_elements(
+        self,
+        records: List[Dict],
+        plan: GraphQueryPlan | None,
+        parameters: Dict[str, Any],
+        client: Neo4jClient,
+    ) -> List[Dict[str, Any]]:
+        """Identify the elements the answer is about, for the 3D viewer.
+
+        Prefers identities already present in the answer's own result rows. Falls
+        back to the plan's dedicated identity query, which exists because
+        aggregate answers (`count(r)`) name no element at all.
+
+        Never raises: the answer is the product, the highlight is a presentation
+        of it, so a failure here must not fail the question.
+        """
+        try:
+            elements = harvest_elements(records)
+            if elements or not (plan and plan.visualization_cypher):
+                return elements
+            is_valid, warnings = client.validate(plan.visualization_cypher, parameters)
+            if not is_valid:
+                logger.warning(
+                    "Visualization query for intent=%s failed validation: %s", plan.intent, warnings,
+                )
+                return []
+            return harvest_elements(client.run(plan.visualization_cypher, parameters))
+        except Exception as exc:
+            logger.warning("Element resolution for visualization failed: %s", exc)
+            return []
 
     def _empty_result_message(self, cypher: str, client: Neo4jClient) -> str:
         """Distinguish 'genuinely no data' from 'filter is probably wrong'
@@ -179,46 +214,33 @@ class GraphRetriever:
             return self._empty_result_message(cypher, client), []
 
         lines = []
-        sources = []
 
         for i, record in enumerate(records[:25], 1):  # cap at 25 for token limits
             line_parts = []
 
             for key, value in record.items():
-                if hasattr(value, "labels"):  # Neo4j Node object
-                    props = dict(value)
-                    label = list(value.labels)[0] if value.labels else "Element"
-                    name = props.get("name", "Unnamed")
-                    elem_id = props.get("id", "N/A")
-                    ifc_guid = props.get("ifcGuid", elem_id)
-                    tag = props.get("tag")
-                    ifc_type = props.get("ifcType", label)
+                # Neo4jClient.run() calls Record.data(), which turns driver Node
+                # objects into plain property dicts and drops their labels. So a
+                # returned node arrives here as a dict, not as an object with
+                # .labels - hence the structural check. Rendering it as a raw
+                # dict would truncate at the 100-char scalar cap below and hide
+                # the very IDs the answer needs to cite.
+                if looks_like_element_node(value):
+                    name = value.get("name") or "Unnamed"
+                    elem_id = value.get("id") or "N/A"
+                    ifc_guid = value.get("ifcGuid") or elem_id
+                    tag = value.get("tag")
+                    ifc_type = value.get("ifcType") or "Element"
                     id_display = f"id={elem_id}, ifcGuid={ifc_guid}" + (f", tag={tag}" if tag else "")
-                    line_parts.append(
-                        f"{key}={ifc_type}({id_display}, name={name})"
-                    )
-                    sources.append({
-                        "type": "graph",
-                        "element_id": elem_id,
-                        "ifc_guid": ifc_guid,
-                        "tag": tag,
-                        "name": name,
-                        "ifc_type": ifc_type,
-                        "source_ifc_file": props.get("sourceIfcFile"),
-                        "project_id": props.get("projectId"),
-                    })
+                    line_parts.append(f"{key}={ifc_type}({id_display}, name={name})")
 
-                elif hasattr(value, "type"):  # Neo4j Relationship object
-                    rel_type = value.type
-                    start = (
-                        value.start_node.get("name", "N/A")
-                        if hasattr(value, "start_node") else "?"
-                    )
-                    end = (
-                        value.end_node.get("name", "N/A")
-                        if hasattr(value, "end_node") else "?"
-                    )
-                    line_parts.append(f"{key}=[:{rel_type}]({start}\u2192{end})")
+                elif isinstance(value, tuple) and len(value) == 3:
+                    # Record.data() renders a relationship as
+                    # (start_properties, type_name, end_properties).
+                    start, rel_type, end = value
+                    start_name = start.get("name", "N/A") if isinstance(start, dict) else "?"
+                    end_name = end.get("name", "N/A") if isinstance(end, dict) else "?"
+                    line_parts.append(f"{key}=[:{rel_type}]({start_name}\u2192{end_name})")
 
                 elif isinstance(value, list):
                     line_parts.append(f"{key}=[{len(value)} items]")
@@ -232,15 +254,20 @@ class GraphRetriever:
 
             lines.append(f"  {i}. " + " | ".join(line_parts))
 
-            # Planned relationship listings return scalar projections rather
-            # than Node objects. Preserve their endpoint IDs as UI sources.
-            for prefix in ("element_a", "element_b"):
-                elem_id = record.get(f"{prefix}_id")
-                if elem_id:
-                    sources.append({
-                        "type": "graph", "element_id": elem_id,
-                        "name": record.get(f"{prefix}_name") or "",
-                    })
+        # Citation chips for the elements behind the displayed rows. Derived from
+        # the same harvest the 3D viewer uses, so the chips and the highlighted
+        # geometry can never disagree about which elements the answer cited.
+        sources = [
+            {
+                "type": "graph",
+                "element_id": element["element_id"],
+                "ifc_guid": element["ifc_guid"],
+                "name": element["name"],
+                "ifc_type": element["ifc_type"],
+                "storey_name": element["storey_name"],
+            }
+            for element in harvest_elements(records[:25])
+        ]
 
         header = (
             f"Building Graph Results ({len(records)} total, "

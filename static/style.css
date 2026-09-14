@@ -45,6 +45,7 @@
   --rail-w: 300px;
   --measure: 52rem;
   --reading-measure: 46rem;
+  --viewer-w: 560px;
 
   --shadow-panel: 4px 4px 0 rgba(17, 17, 17, 0.06);
 }
@@ -1456,6 +1457,136 @@ html[dir="rtl"] .context-rail.open {
    on narrower viewports — it simply overlays the chat column. */
 
 /* ==========================================================================
+   3D map — a wider sibling of the context rail
+   --------------------------------------------------------------------------
+   Same drawer mechanics as .context-rail (fixed overlay on the inline-end
+   edge, mirrored under dir="rtl" via logical properties) but wider, because a
+   3D view needs area to be legible. Kept out of the flex flow so opening it
+   never re-wraps the conversation.
+   ========================================================================== */
+
+.viewer-panel {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 60;
+  width: var(--viewer-w);
+  max-width: 94vw;
+  display: flex;
+  flex-direction: column;
+  border-inline-start: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: -6px 0 0 rgba(17, 17, 17, 0.05);
+  padding: 1.25rem 1.15rem;
+  transform: translateX(100%);
+  transition: transform 0.2s ease-out;
+  visibility: hidden;
+}
+
+html[dir="rtl"] .viewer-panel {
+  transform: translateX(-100%);
+  box-shadow: 6px 0 0 rgba(17, 17, 17, 0.05);
+}
+
+.viewer-panel.open,
+html[dir="rtl"] .viewer-panel.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+/* Matches .context-rail.hidden: the non-chat tabs must beat .open. */
+.viewer-panel.hidden {
+  display: none;
+}
+
+.viewer-panel h3 {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.viewer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin-block: 0.85rem;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+}
+
+/* The canvas is sized by ResizeObserver in viewer.js; block display stops the
+   inline-baseline gap that would otherwise overflow the stage by a few px. */
+#viewer-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--fg-light);
+  font-size: 0.82rem;
+  pointer-events: none;
+}
+
+.viewer-placeholder.hidden {
+  display: none;
+}
+
+.viewer-footer {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  line-height: 1.7;
+}
+
+.viewer-footer .viewer-scope {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+/* Per-message affordance that re-targets the single viewer to that answer. */
+.chat-view-3d {
+  align-self: flex-start;
+  margin-block-start: 0.5rem;
+  padding: 0.28rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chat-view-3d:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+/* The opt-in variant carries a dashed border because what it offers is
+   orientation by IFC type, not evidence the answer relied on. */
+.chat-view-3d.speculative {
+  border-style: dashed;
+}
+
+/* ==========================================================================
    Model toggle (chat header)
    ========================================================================== */
 
@@ -2342,7 +2473,8 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 /* Users who prefer reduced motion get an instant open/close, no slide. */
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
-  .context-rail {
+  .context-rail,
+  .viewer-panel {
     transition: none;
   }
 

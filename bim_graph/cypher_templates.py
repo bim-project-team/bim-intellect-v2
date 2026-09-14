@@ -59,7 +59,16 @@ def try_template_match(question: str) -> Optional[str]:
                 f"WHERE {_element_id_match_clause(element_id)} "
                 "RETURN e.name AS source_name, other.name AS other_name, "
                 "other.ifcType AS other_type, r.issue AS issue, "
-                "r.metric AS metric "
+                "r.metric AS metric, "
+                # Identity columns for the 3D viewer. Aliased with the _id/_guid
+                # suffixes bim_graph.visualization harvests, and additive to the
+                # answer columns above so context formatting is unchanged.
+                "e.id AS element_a_id, coalesce(e.ifcGuid, e.id) AS element_a_guid, "
+                "e.name AS element_a_name, e.ifcType AS element_a_type, "
+                "e.storeyName AS element_a_storey, "
+                "other.id AS element_b_id, coalesce(other.ifcGuid, other.id) AS element_b_guid, "
+                "other.name AS element_b_name, other.ifcType AS element_b_type, "
+                "other.storeyName AS element_b_storey "
                 "LIMIT 50"
             )
 

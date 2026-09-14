@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from bim_graph.graph_retriever import GraphRetriever
+from bim_graph.visualization import build_payload as build_visualization_payload
 from sustainability.assessment import LeedAssessment, assess_available_evidence
 from sustainability.retriever import SustainabilityEvidence, SustainabilityEvidenceRetriever
 
@@ -157,6 +158,11 @@ class RetrievalResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     regulation: RegulationRetrieval | None = None
     graph_debug: dict[str, Any] = field(default_factory=dict)
+    # Elements the graph identified as the answer's subject, for 3D display.
+    # Kept out of `sources` on purpose: `sources` drives citation chips and is
+    # filtered against what the answer text cites, which is the wrong lifecycle
+    # for a geometry highlight.
+    graph_elements: list[dict[str, Any]] = field(default_factory=list)
     sustainability_context: str = ""
     sustainability: SustainabilityEvidence | None = None
     sustainability_debug: dict[str, Any] = field(default_factory=dict)
@@ -814,6 +820,7 @@ class RAGOrchestrator:
                         f"Query executed: {graph.get('cypher_query', '')}\n\n{graph['context']}"
                     )
                     result.sources.extend(graph.get("sources", []))
+                result.graph_elements = list(graph.get("elements", []))
             except Exception as exc:
                 logger.error("Graph retrieval failed: %s", exc)
                 result.graph_debug = {"error": str(exc)}
@@ -1065,6 +1072,12 @@ class RAGOrchestrator:
                     "metadata_source": "pdf_total_page_count",
                     "page_number_convention": "physical_pdf_page_1_based",
                 },
+                # Keep the response contract stable for metadata-only answers.
+                # Page-count evidence identifies a document, not BIM elements.
+                "visualization": build_visualization_payload(
+                    understanding["standalone_query"], None,
+                    project_id=project_id, file_ids=file_ids,
+                ),
             }
         logger.info(
             "RAG mode=%s router=%s final=%s original=%r rewritten=%r vector=%s graph=%s sustainability=%s domains=%s follow_up=%s complete=%s",
@@ -1088,6 +1101,11 @@ class RAGOrchestrator:
                 "router_model": profile.router_model, "final_model": profile.final_model,
                 "rewritten_query": understanding["standalone_query"],
                 "retrieval_debug": {"intent": "conversation"},
+                # A greeting has no building subject, so there is deliberately
+                # nothing to offer here - not even the opt-in type view.
+                "visualization": build_visualization_payload(
+                    "", None, project_id=project_id, file_ids=file_ids,
+                ),
             }
 
         # Free-form Cypher generation is part of query understanding. In strong
@@ -1121,8 +1139,13 @@ class RAGOrchestrator:
                 "برای جلوگیری از ارائه ادعای بدون منبع، پاسخ نمایش داده نشد."
             )
             answer_sources: list[dict] = []
+            # The answer was withheld, so there is no claim for geometry to
+            # illustrate. Highlighting elements here would imply the system
+            # verified something it just refused to state.
+            answer_elements: list[dict] = []
         else:
             answer_sources = sources_used_by_answer(answer, retrieval.sources)
+            answer_elements = retrieval.graph_elements
 
         completeness = validate_answer_completeness(
             answer,
@@ -1148,6 +1171,7 @@ class RAGOrchestrator:
                     answer = repaired
                     completeness = repaired_completeness
                     answer_sources = sources_used_by_answer(answer, retrieval.sources)
+                    answer_elements = retrieval.graph_elements
             except (LLMConfigError, LLMRequestError) as exc:
                 logger.error("Completeness repair failed: %s", exc)
         if completeness.complete_set_established and not completeness.valid:
@@ -1162,6 +1186,7 @@ class RAGOrchestrator:
                 answer = extractive
                 completeness = extractive_completeness
                 answer_sources = sources_used_by_answer(answer, retrieval.sources)
+                answer_elements = retrieval.graph_elements
 
         sustainability_numbers_valid = (
             not understanding.get("needs_sustainability")
@@ -1177,12 +1202,16 @@ class RAGOrchestrator:
                 and validate_leed_assessment_language(answer, retrieval.assessment)
             ):
                 answer_sources = sources_used_by_answer(answer, retrieval.sources)
+                # The extractive answer is grounded, so it may illustrate again.
+                answer_elements = retrieval.graph_elements
             else:
                 answer = (
                     "The generated sustainability answer contained an unsupported numeric value and "
                     "the safe extractive fallback could not satisfy citation validation."
                 )
                 answer_sources = []
+                # A withheld answer has no claim to illustrate.
+                answer_elements = []
 
         if retrieval.assessment and hasattr(self.memory, "record_sustainability_finding"):
             sustainability_data = (
@@ -1258,4 +1287,13 @@ class RAGOrchestrator:
             "final_model": profile.final_model,
             "rewritten_query": understanding["standalone_query"],
             "retrieval_debug": diagnostics,
+            # Matched on the rewritten query so a follow-up ("what about the
+            # stairs there?") resolves against the same subject the retrieval
+            # used, not against the elliptical original.
+            "visualization": build_visualization_payload(
+                understanding["standalone_query"],
+                {"elements": answer_elements, **retrieval.graph_debug},
+                project_id=project_id,
+                file_ids=file_ids,
+            ),
         }
