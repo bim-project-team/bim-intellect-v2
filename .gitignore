@@ -57,6 +57,7 @@ dataset/ifc/scenes/
 chroma_db/
 
 # RAG testing files
+.test-rag/
 rag/find_cluases.py
 rag/inspect_chroma.py
 
