@@ -107,6 +107,66 @@ def update_file(project_id: str, file_id: str, **updates: Any) -> dict[str, Any]
         return deepcopy(project["files"][file_id])
 
 
+def remove_files(project_id: str, file_ids: list[str]) -> list[dict[str, Any]]:
+    """Atomically remove selected file records from one project.
+
+    Graph, scene, and physical-file cleanup are deliberately orchestrated by
+    the API while holding the pipeline lock. This function owns only registry
+    mutation and never touches sibling projects or unselected records.
+    """
+    wanted = set(file_ids)
+    if not wanted:
+        return []
+    with _LOCK:
+        data = _read()
+        projects = data.get("projects", {})
+        project = projects.get(project_id)
+        if not project:
+            return []
+        files = project.get("files", {})
+        removed = [deepcopy(record) for key, record in files.items() if key in wanted]
+        for file_id in wanted:
+            files.pop(file_id, None)
+        if not files:
+            projects.pop(project_id, None)
+        elif removed:
+            project["updated_at"] = utc_now()
+        if removed:
+            _write(data)
+        return sorted(removed, key=lambda record: record.get("uploaded_at", ""))
+
+
+def mark_all_files_not_in_graph() -> int:
+    """Synchronize registry state after a deliberate full-graph reset.
+
+    A global Neo4j wipe removes every project's models, not only the project in
+    the current request. Leaving sibling registry records marked ``ingested``
+    would make the UI and sustainability scope resolver claim those absent
+    models were still available. The caller re-marks the newly loaded files as
+    ingested after this atomic transition.
+    """
+    changed = 0
+    with _LOCK:
+        data = _read()
+        now = utc_now()
+        for project in data.get("projects", {}).values():
+            project_changed = False
+            for record in project.get("files", {}).values():
+                if record.get("status") == "ingested" or record.get("processing_status") in {
+                    "imported", "analyzed", "extracting",
+                }:
+                    record["status"] = "uploaded"
+                    record["processing_status"] = "not_in_graph"
+                    record["error"] = None
+                    changed += 1
+                    project_changed = True
+            if project_changed:
+                project["updated_at"] = now
+        if changed:
+            _write(data)
+    return changed
+
+
 def get_files(project_id: str, file_ids: list[str] | None = None) -> list[dict[str, Any]]:
     with _LOCK:
         project = _read().get("projects", {}).get(project_id, {})

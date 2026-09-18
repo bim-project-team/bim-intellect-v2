@@ -11,9 +11,9 @@
 // Coordinates. Scene geometry is Y-up, matching three.js, because
 // bim_graph/scene_export.py emits it that way. Bounding boxes from
 // /api/model/elements are already converted server-side, so nothing here needs
-// to know the IFC axis convention. Units are project file units (feet for the
-// reference model), which is why distances below are expressed as multiples of
-// the model's own size rather than in metres.
+// to know the IFC axis convention. Extracted scenes and AABBs use the same
+// canonical metre coordinate contract. Camera distances below remain expressed
+// as multiples of the loaded model size so navigation scales naturally.
 
 // Bare specifiers, resolved by the importmap in templates/index.html. Using the
 // same specifier the addons use guarantees one three.js module instance; a mix
@@ -121,6 +121,13 @@ export class ModelViewer {
     for (const geometry of this.ownedGeometry) geometry.dispose();
     this.ownedGeometry.clear();
     this.highlightKeys.clear();
+  }
+
+  cancelAndClear() {
+    // Explicit scope changes (for example deleting an IFC model) must also
+    // invalidate any GLB request that was already in flight.
+    this.loadToken += 1;
+    this.clear();
   }
 
   /** Drop the least recently used parsed scene, freeing its GPU buffers. */
@@ -345,5 +352,8 @@ window.bimViewer = {
   },
   resetView() {
     instance?.resetView();
+  },
+  clear() {
+    instance?.cancelAndClear();
   },
 };

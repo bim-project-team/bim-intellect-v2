@@ -420,6 +420,22 @@ def delete_document(document_id: str, settings: RAGSettings = SETTINGS) -> int:
     return len(ids)
 
 
+def delete_documents(document_ids: Iterable[str], settings: RAGSettings = SETTINGS) -> dict[str, int]:
+    """Delete chunks for selected document IDs without rebuilding the collection."""
+    normalized = list(dict.fromkeys(str(value).strip() for value in document_ids if str(value).strip()))
+    if not normalized:
+        return {}
+    collection = get_or_create_collection(settings=settings)
+    deleted: dict[str, int] = {}
+    for document_id in normalized:
+        existing = collection.get(where={"document_id": document_id}, include=[])
+        ids = list(existing.get("ids", []))
+        if ids:
+            collection.delete(ids=ids)
+        deleted[document_id] = len(ids)
+    return deleted
+
+
 def main() -> None:
     from .indexer import main as index_main
     index_main()

@@ -70,6 +70,33 @@ def test_strong_model_profile_uses_gemini_then_claude():
     assert strong.final_model == "anthropic/claude-sonnet-test"
 
 
+def test_chat_callable_always_sends_explicit_completion_limit(monkeypatch):
+    from rag import orchestrator
+
+    captured = {}
+
+    class Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+    class Client:
+        class Chat:
+            completions = Completions()
+        chat = Chat()
+
+    monkeypatch.setattr(orchestrator, "get_client", lambda: Client())
+
+    result = orchestrator._chat_callable(
+        [{"role": "user", "content": "test"}],
+        "anthropic/claude-sonnet-test",
+        max_tokens=4096,
+    )()
+
+    assert result == "ok"
+    assert captured["max_tokens"] == 4096
+
+
 @pytest.mark.parametrize("rendered", [
     "[Clause 15-1-1-1, Page 11]",
     "[Clause 15-1-1-1, Page 11 ]",

@@ -22,7 +22,11 @@ function autoDir(html) {
 // Reusable checkbox-dropdown multiselect widget
 // ------------------------------------------------------------------
 class MultiSelectDropdown {
-  constructor(rootId, { emptyTextKey = "pipeline.noneFound" } = {}) {
+  constructor(rootId, {
+    emptyTextKey = "pipeline.noneFound",
+    allOptionKey = null,
+    selectAllByDefault = false,
+  } = {}) {
     this.root = document.getElementById(rootId);
     if (!this.root) return;
 
@@ -32,6 +36,9 @@ class MultiSelectDropdown {
     this.optionsEl = this.root.querySelector(".multiselect-options");
     this.searchInput = this.root.querySelector(".multiselect-search");
     this.emptyTextKey = emptyTextKey;
+    this.allOptionKey = allOptionKey;
+    this.selectAllByDefault = selectAllByDefault;
+    this.hasLoadedOptions = false;
     // Remembered so the label/placeholder can be re-rendered in the new
     // language without the caller having to re-supply it.
     this.placeholderKey = "pipeline.selectFileFirst";
@@ -44,18 +51,10 @@ class MultiSelectDropdown {
     });
 
     this.root.querySelectorAll('[data-action="all"]').forEach((btn) =>
-      btn.addEventListener("click", () => {
-        this.options.forEach((o) => this.selected.add(o.value));
-        this._syncCheckboxes();
-        this._updateLabel();
-      })
+      btn.addEventListener("click", () => this.selectAll())
     );
     this.root.querySelectorAll('[data-action="none"]').forEach((btn) =>
-      btn.addEventListener("click", () => {
-        this.selected.clear();
-        this._syncCheckboxes();
-        this._updateLabel();
-      })
+      btn.addEventListener("click", () => this.clear())
     );
 
     if (this.searchInput) {
@@ -118,10 +117,13 @@ class MultiSelectDropdown {
     // models changes; dropping the selection there would silently reset the
     // user's filters).
     const previous = new Set(this.selected);
+    const wasAllSelected = this.options.length > 0 && this.selected.size === this.options.length;
     this.options = options || [];
-    this.selected = new Set(
-      this.options.map((o) => o.value).filter((value) => previous.has(value))
-    );
+    const shouldSelectAll = this.selectAllByDefault && (!this.hasLoadedOptions || wasAllSelected);
+    this.selected = new Set(this.options
+      .map((o) => o.value)
+      .filter((value) => shouldSelectAll || previous.has(value)));
+    this.hasLoadedOptions = true;
     this.toggleBtn.disabled = this.options.length === 0;
     this._renderOptions();
     this._updateLabel();
@@ -139,6 +141,18 @@ class MultiSelectDropdown {
     return this.getSelected();
   }
 
+  selectAll() {
+    this.options.forEach((o) => this.selected.add(o.value));
+    this._syncCheckboxes();
+    this._updateLabel();
+  }
+
+  clear() {
+    this.selected.clear();
+    this._syncCheckboxes();
+    this._updateLabel();
+  }
+
   _renderOptions() {
     const filter = this.searchInput ? this.searchInput.value.trim().toLowerCase() : "";
     const visible = filter
@@ -154,7 +168,16 @@ class MultiSelectDropdown {
       return;
     }
 
-    this.optionsEl.innerHTML = visible
+    const allOptionHtml = this.allOptionKey
+      ? `
+          <label class="multiselect-option multiselect-all-option">
+            <input type="checkbox" data-select-all ${this.selected.size === this.options.length ? "checked" : ""} />
+            <span class="option-label">${escapeHtml(t(this.allOptionKey))}</span>
+          </label>
+        `
+      : "";
+
+    this.optionsEl.innerHTML = allOptionHtml + visible
       .map((o) => {
         const checked = this.selected.has(o.value) ? "checked" : "";
         const countHtml = o.count !== undefined ? `<span class="option-count">${Number(o.count)}</span>` : "";
@@ -169,17 +192,30 @@ class MultiSelectDropdown {
       })
       .join("");
 
-    this.optionsEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    const allCheckbox = this.optionsEl.querySelector('input[data-select-all]');
+    if (allCheckbox) {
+      allCheckbox.addEventListener("change", () => {
+        if (allCheckbox.checked) this.selectAll();
+        else this.clear();
+      });
+    }
+
+    this.optionsEl.querySelectorAll('input[type="checkbox"]:not([data-select-all])').forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.checked) this.selected.add(cb.value);
         else this.selected.delete(cb.value);
+        this._syncCheckboxes();
         this._updateLabel();
       });
     });
   }
 
   _syncCheckboxes() {
-    this.optionsEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    const allCheckbox = this.optionsEl.querySelector('input[data-select-all]');
+    if (allCheckbox) {
+      allCheckbox.checked = this.options.length > 0 && this.selected.size === this.options.length;
+    }
+    this.optionsEl.querySelectorAll('input[type="checkbox"]:not([data-select-all])').forEach((cb) => {
       cb.checked = this.selected.has(cb.value);
     });
   }
@@ -188,8 +224,12 @@ class MultiSelectDropdown {
     const n = this.selected.size;
     if (this.options.length === 0) {
       this.toggleLabel.textContent = t(this.emptyTextKey);
+    } else if (this.allOptionKey && n === this.options.length) {
+      this.toggleLabel.textContent = t(this.allOptionKey);
     } else if (n === 0) {
-      this.toggleLabel.textContent = t("pipeline.allSelected");
+      this.toggleLabel.textContent = this.allOptionKey
+        ? t("pipeline.nSelected", { n: 0 })
+        : t("pipeline.allSelected");
     } else if (n <= 2) {
       const labels = this.options.filter((o) => this.selected.has(o.value)).map((o) => o.label);
       this.toggleLabel.textContent = labels.join(", ");
@@ -206,7 +246,10 @@ let activeTab = "clashes"; // for results sub-tabs
 let activeNav = "chat";    // for main navigation
 let selectedElementId = null;
 let selectedPdfFiles = [];
+let selectedDocumentIds = new Set();
+let indexedDocuments = [];
 let selectedIfcFileIds = new Set();
+let selectedIfcDeleteIds = new Set();
 let ifcProjects = [];
 let sustainabilityState = {
   scopeKey: null,
@@ -216,6 +259,7 @@ let sustainabilityState = {
   findings: [],
   requestToken: 0,
 };
+let currentProjectIfcFiles = [];
 
 // ------------------------------------------------------------------
 // DOM refs
@@ -273,6 +317,11 @@ const ifcModelList = document.getElementById("ifc-model-list");
 
 const ingestStoreyDropdown = new MultiSelectDropdown("ingestStoreyFilter", { emptyTextKey: "pipeline.noStoreys" });
 const ingestTypeDropdown = new MultiSelectDropdown("ingestTypeFilter", { emptyTextKey: "pipeline.noTypes" });
+const resultTypeDropdown = new MultiSelectDropdown("resultTypeFilter", {
+  emptyTextKey: "pipeline.noTypes",
+  allOptionKey: "results.allTypes",
+  selectAllByDefault: true,
+});
 
 const dropZone = document.getElementById("drop-zone");
 const pdfFileInput = document.getElementById("pdf-file");
@@ -284,7 +333,11 @@ const uploadStatusText = document.getElementById("upload-status-text");
 
 const refreshCorpusBtn = document.getElementById("refresh-corpus-btn");
 const clearCorpusBtn = document.getElementById("clear-corpus-btn");
+const corpusSelectAll = document.getElementById("corpus-select-all");
+const deleteCorpusSelectedBtn = document.getElementById("delete-corpus-selected-btn");
 const corpusInfo = document.getElementById("corpus-info");
+const ifcDeleteSelectAll = document.getElementById("ifc-delete-select-all");
+const ifcDeleteSelectedBtn = document.getElementById("ifc-delete-selected-btn");
 
 // ------------------------------------------------------------------
 // Navigation + drawers
@@ -417,6 +470,7 @@ navButtons.forEach((btn) => {
     if (target === "results") {
       loadStoreys();
       loadTypes();
+      loadResults();
     }
   });
 });
@@ -1085,6 +1139,22 @@ uploadForm.addEventListener("submit", async (e) => {
 // Corpus Status
 // ------------------------------------------------------------------
 
+function updateCorpusSelectionControls() {
+  const available = new Set(indexedDocuments.map((doc) => String(doc.document_id)));
+  selectedDocumentIds = new Set(
+    Array.from(selectedDocumentIds).filter((documentId) => available.has(documentId))
+  );
+  if (corpusSelectAll) {
+    corpusSelectAll.checked = available.size > 0 && selectedDocumentIds.size === available.size;
+    corpusSelectAll.indeterminate = selectedDocumentIds.size > 0
+      && selectedDocumentIds.size < available.size;
+    corpusSelectAll.disabled = available.size === 0;
+  }
+  if (deleteCorpusSelectedBtn) {
+    deleteCorpusSelectedBtn.disabled = selectedDocumentIds.size === 0;
+  }
+}
+
 async function loadCorpusStatus() {
   corpusInfo.innerHTML = `<p class="hint">${escapeHtml(t("common.loading"))}</p>`;
   try {
@@ -1100,6 +1170,7 @@ async function loadCorpusStatus() {
     const collection = data.collection ?? "?";
     const dir = data.chroma_dir ?? "?";
     const documents = data.documents || [];
+    indexedDocuments = documents;
 
     let html = `
       <div class="stat-row"><span>${escapeHtml(t("corpus.collection"))}</span><span dir="auto">${escapeHtml(collection)}</span></div>
@@ -1110,24 +1181,69 @@ async function loadCorpusStatus() {
 
     if (documents.length > 0) {
       html += `<div class="stored-file-list">${documents.map((doc) => `
-        <div class="stored-file-row">
+        <label class="stored-file-row selectable-file">
+          <input type="checkbox" class="document-select" data-document-id="${escapeHtml(doc.document_id)}"
+                 aria-label="${escapeHtml(t("corpus.selectDocument", { name: doc.filename }))}"
+                 ${selectedDocumentIds.has(String(doc.document_id)) ? "checked" : ""} />
           <div class="stored-file-copy">
             <strong dir="auto">${escapeHtml(doc.filename)}</strong>
             <span class="stored-file-meta">${escapeHtml(doc.document_domain || "regulation")}${doc.standard_name ? ` · ${escapeHtml(doc.standard_name)} ${escapeHtml(doc.standard_version || "")}` : ""} · ${Number(doc.chunk_count || 0)} ${escapeHtml(t("corpus.chunks"))} · ${Number(doc.page_count || 0)} ${escapeHtml(t("corpus.pages"))}${doc.ingested_at ? ` · ${escapeHtml(doc.ingested_at)}` : ""}</span>
           </div>
           <span class="file-status status-indexed">${escapeHtml(t("corpus.indexed"))}</span>
-        </div>`).join("")}</div>`;
+        </label>`).join("")}</div>`;
     } else {
       html += `<p class="hint">${escapeHtml(t("corpus.noDocuments"))}</p>`;
     }
 
     corpusInfo.innerHTML = html;
+    corpusInfo.querySelectorAll("input.document-select").forEach((input) => {
+      input.addEventListener("change", () => {
+        if (input.checked) selectedDocumentIds.add(input.dataset.documentId);
+        else selectedDocumentIds.delete(input.dataset.documentId);
+        updateCorpusSelectionControls();
+      });
+    });
+    updateCorpusSelectionControls();
   } catch (err) {
+    indexedDocuments = [];
+    selectedDocumentIds.clear();
+    updateCorpusSelectionControls();
     corpusInfo.innerHTML = `<p class="hint">${escapeHtml(t("corpus.loadFailed"))}: ${escapeHtml(err.message)}</p>`;
   }
 }
 
 refreshCorpusBtn.addEventListener("click", loadCorpusStatus);
+
+corpusSelectAll.addEventListener("change", () => {
+  selectedDocumentIds = corpusSelectAll.checked
+    ? new Set(indexedDocuments.map((doc) => String(doc.document_id)))
+    : new Set();
+  corpusInfo.querySelectorAll("input.document-select").forEach((input) => {
+    input.checked = selectedDocumentIds.has(input.dataset.documentId);
+  });
+  updateCorpusSelectionControls();
+});
+
+deleteCorpusSelectedBtn.addEventListener("click", async () => {
+  const documentIds = Array.from(selectedDocumentIds);
+  if (!documentIds.length || !confirm(t("corpus.confirmDelete", { n: documentIds.length }))) return;
+  deleteCorpusSelectedBtn.disabled = true;
+  try {
+    const response = await fetch("/api/rag/documents/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_ids: documentIds }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || response.statusText);
+    selectedDocumentIds.clear();
+    await loadCorpusStatus();
+    showUploadStatus(t("corpus.deleted", { n: data.deleted_documents || 0 }));
+  } catch (err) {
+    alert(`${t("corpus.deleteFailed")}: ${err.message || err}`);
+    updateCorpusSelectionControls();
+  }
+});
 
 clearCorpusBtn.addEventListener("click", async () => {
   if (!confirm(t("corpus.confirmClear"))) {
@@ -1141,7 +1257,8 @@ clearCorpusBtn.addEventListener("click", async () => {
       alert(`${t("corpus.clearFailed")}: ${data.detail || response.statusText}`);
       return;
     }
-    loadCorpusStatus();
+    selectedDocumentIds.clear();
+    await loadCorpusStatus();
   } catch (err) {
     alert(`${t("common.error")}: ${err.message}`);
   } finally {
@@ -1374,6 +1491,29 @@ ingestForm.addEventListener("submit", async (e) => {
 
 let currentStoreyFilter = "";
 let currentTypesFilter = [];
+let resultsLoadToken = 0;
+
+function appendCurrentResultScope(url) {
+  const projectId = projectIdInput ? projectIdInput.value.trim() : "";
+  if (projectId) url.searchParams.set("project_id", projectId);
+  Array.from(selectedIfcFileIds || []).forEach((fileId) => {
+    url.searchParams.append("file_id", fileId);
+  });
+  return url;
+}
+
+function currentResultScopeKey() {
+  const projectId = projectIdInput ? projectIdInput.value.trim() : "";
+  const fileIds = Array.from(selectedIfcFileIds || []).sort();
+  return `${projectId}\u0000${fileIds.join("\u0000")}`;
+}
+
+function invalidateResults() {
+  // Supersede any in-flight request so a slow response for the old project or
+  // file selection cannot repaint stale rows after the scope changed.
+  resultsLoadToken += 1;
+  resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
+}
 
 // Maps the results sub-tab id to its label key, so log lines name the tab in
 // the reader's language instead of echoing the internal identifier.
@@ -1395,7 +1535,8 @@ resultTabButtons.forEach((btn) => {
 refreshResultsBtn.addEventListener("click", loadResults);
 
 async function loadResults() {
-  resultsBody.innerHTML = `<tr><td colspan="6" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
+  const loadToken = ++resultsLoadToken;
+  resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
   try {
     // Call the matching backend route depending on which tab is active
     let endpoint = "api/issues";
@@ -1407,15 +1548,15 @@ async function loadResults() {
     if (currentTypesFilter && currentTypesFilter.length > 0) {
       url.searchParams.set("types", currentTypesFilter.join(","));
     }
-    if (projectIdInput && projectIdInput.value.trim()) {
-      url.searchParams.set("project_id", projectIdInput.value.trim());
-    }
+    appendCurrentResultScope(url);
 
     const rows = await getJSON(url.pathname + url.search);
+    if (loadToken !== resultsLoadToken) return;
     renderRows(rows);
     logInfo(t("log.loadedRows", { n: rows ? rows.length : 0, tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }));
   } catch (err) {
-    resultsBody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(t("common.error"))}: ${escapeHtml(err.message || err)}</td></tr>`;
+    if (loadToken !== resultsLoadToken) return;
+    resultsBody.innerHTML = `<tr><td colspan="13" class="empty">${escapeHtml(t("common.error"))}: ${escapeHtml(err.message || err)}</td></tr>`;
     logError(t("log.loadFailed", { tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }), err.message || err);
   }
 }
@@ -1424,20 +1565,42 @@ function renderRows(rows) {
   if (!rows || rows.length === 0) {
     // data-i18n so the languagechange handler can re-render this row without
     // re-fetching (see the handler near the bottom of this file).
-    resultsBody.innerHTML = `<tr><td colspan="6" class="empty" data-i18n="results.noResults">${escapeHtml(t("results.noResults"))}</td></tr>`;
+    resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.noResults">${escapeHtml(t("results.noResults"))}</td></tr>`;
     return;
   }
   resultsBody.innerHTML = rows
-    .map((r) => `
-      <tr>
-        <td>${autoDir(`<strong>${escapeHtml(r.a_type)}</strong>`)}<br>${autoDir(escapeHtml(r.a_name))}<br><small class="guid">${escapeHtml(r.a_guid ?? r.a_id ?? "")}</small></td>
-        <td>${autoDir(escapeHtml(r.a_source_ifc_file ?? t("results.legacySource")))}</td>
-        <td>${autoDir(`<strong>${escapeHtml(r.b_type)}</strong>`)}<br>${autoDir(escapeHtml(r.b_name))}<br><small class="guid">${escapeHtml(r.b_guid ?? r.b_id ?? "")}</small></td>
-        <td>${autoDir(escapeHtml(r.b_source_ifc_file ?? t("results.legacySource")))}${r.cross_file ? `<br><span class="file-status">${escapeHtml(t("results.crossFile"))}</span>` : ""}</td>
-        <td>${escapeHtml(r.issue ?? "")}</td>
-        <td class="num">${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
-      </tr>
-    `)
+    .map((r) => {
+      const aType = r.element_a_type ?? r.a_type ?? "";
+      const aName = r.element_a_name ?? r.a_name ?? "";
+      const aId = r.element_a_id ?? r.a_id ?? "";
+      const aGuid = r.element_a_guid ?? r.a_guid ?? "";
+      const aFile = r.element_a_source_file ?? r.a_source_ifc_file ?? t("results.legacySource");
+      const aDiscipline = r.element_a_discipline ?? r.a_discipline ?? t("pipeline.unspecified");
+      const bType = r.element_b_type ?? r.b_type ?? "";
+      const bName = r.element_b_name ?? r.b_name ?? "";
+      const bId = r.element_b_id ?? r.b_id ?? "";
+      const bGuid = r.element_b_guid ?? r.b_guid ?? "";
+      const bFile = r.element_b_source_file ?? r.b_source_ifc_file ?? t("results.legacySource");
+      const bDiscipline = r.element_b_discipline ?? r.b_discipline ?? t("pipeline.unspecified");
+      const crossFile = r.cross_file === true || r.relation_scope === "CROSS-FILE";
+      const relationLabel = crossFile ? t("results.crossFile") : t("results.intraFile");
+      return `
+        <tr>
+          <td class="element-summary">${autoDir(`<strong>${escapeHtml(aType)}</strong>`)}<br>${autoDir(escapeHtml(aName))}</td>
+          <td><code class="provenance-id">${escapeHtml(aId)}</code></td>
+          <td><code class="provenance-id">${escapeHtml(aGuid)}</code></td>
+          <td class="source-file">${autoDir(escapeHtml(aFile))}</td>
+          <td>${autoDir(escapeHtml(aDiscipline))}</td>
+          <td class="element-summary">${autoDir(`<strong>${escapeHtml(bType)}</strong>`)}<br>${autoDir(escapeHtml(bName))}</td>
+          <td><code class="provenance-id">${escapeHtml(bId)}</code></td>
+          <td><code class="provenance-id">${escapeHtml(bGuid)}</code></td>
+          <td class="source-file">${autoDir(escapeHtml(bFile))}</td>
+          <td>${autoDir(escapeHtml(bDiscipline))}</td>
+          <td><span class="file-status relation-scope ${crossFile ? "cross-file" : "intra-file"}">${escapeHtml(relationLabel)}</span></td>
+          <td>${escapeHtml(r.issue ?? "")}</td>
+          <td class="num">${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
+        </tr>`;
+    })
     .join("");
 }
 
@@ -1454,9 +1617,12 @@ function renderRows(rows) {
 // only reflect data after a successful /ingest, unlike the Pipeline tab's
 // storey/type dropdowns (which read the source IFC file directly).
 async function loadStoreys() {
+    const scopeKey = currentResultScopeKey();
     try {
-        const response = await fetch('/api/filters/storeys');
+        const url = appendCurrentResultScope(new URL('/api/filters/storeys', window.location.origin));
+        const response = await fetch(url.pathname + url.search);
         const data = await response.json();
+        if (scopeKey !== currentResultScopeKey()) return;
 
         const resultStoreySelect = document.getElementById('storeyFilter');
         if (resultStoreySelect) {
@@ -1483,24 +1649,16 @@ async function loadStoreys() {
 }
 
 async function loadTypes() {
+    const scopeKey = currentResultScopeKey();
     try {
-        const response = await fetch('/api/filters/types');
+        const url = appendCurrentResultScope(new URL('/api/filters/types', window.location.origin));
+        const response = await fetch(url.pathname + url.search);
         const data = await response.json();
+        if (scopeKey !== currentResultScopeKey()) return;
 
-        const resultTypeSelect = document.getElementById('typeFilter');
-        if (resultTypeSelect) {
-            const previouslySelected = new Set(
-                Array.from(resultTypeSelect.selectedOptions).map((opt) => opt.value)
-            );
-            resultTypeSelect.innerHTML = '';
-            (data.types || []).forEach(type => {
-                const opt = document.createElement('option');
-                opt.value = type;
-                opt.textContent = type;
-                if (previouslySelected.has(type)) opt.selected = true;
-                resultTypeSelect.appendChild(opt);
-            });
-        }
+        resultTypeDropdown.setOptions(
+            (data.types || []).map(type => ({ value: type, label: type }))
+        );
     } catch (error) {
         console.error("Failed to load types:", error);
     }
@@ -1509,6 +1667,22 @@ async function loadTypes() {
 // ------------------------------------------------------------------
 // Project-scoped multi-IFC upload, selection and combined filter metadata.
 // ------------------------------------------------------------------
+
+function updateIfcSelectionControls() {
+  const availableIds = new Set(currentProjectIfcFiles.map((item) => item.file_id));
+  selectedIfcDeleteIds = new Set(Array.from(selectedIfcDeleteIds)
+    .filter((fileId) => availableIds.has(fileId)));
+  const selectedCount = Array.from(selectedIfcDeleteIds)
+    .filter((fileId) => availableIds.has(fileId)).length;
+  if (ifcDeleteSelectAll) {
+    ifcDeleteSelectAll.checked = availableIds.size > 0 && selectedCount === availableIds.size;
+    ifcDeleteSelectAll.indeterminate = selectedCount > 0 && selectedCount < availableIds.size;
+    ifcDeleteSelectAll.disabled = availableIds.size === 0;
+  }
+  if (ifcDeleteSelectedBtn) {
+    ifcDeleteSelectedBtn.disabled = selectedCount === 0;
+  }
+}
 
 function populateIngestFilterSelects(data) {
     const rescanBtn = document.getElementById('rescan-dataset-btn');
@@ -1588,8 +1762,10 @@ async function loadIfcProjects() {
     const projectId = projectIdInput.value.trim();
     const project = ifcProjects.find((item) => item.project_id === projectId);
     const files = project ? project.files : [];
+    currentProjectIfcFiles = files;
     const availableIds = new Set(files.map((item) => item.file_id));
     selectedIfcFileIds = new Set(Array.from(selectedIfcFileIds).filter((id) => availableIds.has(id)));
+    selectedIfcDeleteIds = new Set(Array.from(selectedIfcDeleteIds).filter((id) => availableIds.has(id)));
     if (!selectedIfcFileIds.size) files.filter((item) => item.status === "ingested").forEach((item) => selectedIfcFileIds.add(item.file_id));
     const updateCombinedFilters = () => {
       const selected = files.filter((item) => selectedIfcFileIds.has(item.file_id));
@@ -1602,14 +1778,22 @@ async function loadIfcProjects() {
     };
     updateCombinedFilters();
     const registeredHtml = files.length ? files.map((item) => `
-      <label class="stored-file-row selectable-file">
-        <input type="checkbox" data-file-id="${escapeHtml(item.file_id)}" ${selectedIfcFileIds.has(item.file_id) ? "checked" : ""} />
+      <div class="stored-file-row selectable-file">
+        <input type="checkbox" data-file-id="${escapeHtml(item.file_id)}"
+               aria-label="${escapeHtml(t("pipeline.selectForAnalysis", { name: item.filename }))}"
+               ${selectedIfcFileIds.has(item.file_id) ? "checked" : ""} />
         <div class="stored-file-copy">
           <strong dir="auto">${escapeHtml(item.filename)}</strong>
           <span class="stored-file-meta">${escapeHtml(item.discipline || t("pipeline.unspecified"))} · ${Number(item.node_count || 0)} ${escapeHtml(t("pipeline.nodes"))} · ${escapeHtml(item.ingested_at || item.uploaded_at || "")}</span>
         </div>
         <span class="file-status status-${escapeHtml(item.status)}">${escapeHtml(item.processing_status || item.status)}</span>
-      </label>`).join("") : `<p class="hint">${escapeHtml(t("pipeline.noModels"))}</p>`;
+        <label class="selection-toggle deletion-toggle">
+          <input type="checkbox" class="ifc-delete-select" data-delete-file-id="${escapeHtml(item.file_id)}"
+                 aria-label="${escapeHtml(t("pipeline.selectForDeletion", { name: item.filename }))}"
+                 ${selectedIfcDeleteIds.has(item.file_id) ? "checked" : ""} />
+          <span>${escapeHtml(t("common.delete"))}</span>
+        </label>
+      </div>`).join("") : `<p class="hint">${escapeHtml(t("pipeline.noModels"))}</p>`;
     const legacyHtml = (data.legacy_unregistered_files || []).length ? `
       <p class="hint">${escapeHtml(t("pipeline.legacyFiles"))}</p>
       ${(data.legacy_unregistered_files || []).map((item) => `
@@ -1620,11 +1804,75 @@ async function loadIfcProjects() {
       if (input.checked) selectedIfcFileIds.add(input.dataset.fileId);
       else selectedIfcFileIds.delete(input.dataset.fileId);
       updateCombinedFilters();
+      updateIfcSelectionControls();
+      invalidateResults();
+      if (activeNav === "results") {
+        loadStoreys();
+        loadTypes();
+        loadResults();
+      }
     }));
+    ifcModelList.querySelectorAll("input[data-delete-file-id]").forEach((input) => input.addEventListener("change", () => {
+      if (input.checked) selectedIfcDeleteIds.add(input.dataset.deleteFileId);
+      else selectedIfcDeleteIds.delete(input.dataset.deleteFileId);
+      updateIfcSelectionControls();
+    }));
+    updateIfcSelectionControls();
   } catch (err) {
+    currentProjectIfcFiles = [];
+    updateIfcSelectionControls();
     ifcModelList.innerHTML = `<p class="hint">${escapeHtml(t("pipeline.listFailed"))}: ${escapeHtml(err.message)}</p>`;
   }
 }
+
+ifcDeleteSelectAll.addEventListener("change", () => {
+  selectedIfcDeleteIds = ifcDeleteSelectAll.checked
+    ? new Set(currentProjectIfcFiles.map((item) => item.file_id))
+    : new Set();
+  ifcModelList.querySelectorAll("input[data-delete-file-id]").forEach((input) => {
+    input.checked = selectedIfcDeleteIds.has(input.dataset.deleteFileId);
+  });
+  updateIfcSelectionControls();
+});
+
+ifcDeleteSelectedBtn.addEventListener("click", async () => {
+  const projectId = projectIdInput.value.trim();
+  const availableIds = new Set(currentProjectIfcFiles.map((item) => item.file_id));
+  const fileIds = Array.from(selectedIfcDeleteIds).filter((fileId) => availableIds.has(fileId));
+  if (!projectId || !fileIds.length) return;
+  if (!confirm(t("pipeline.confirmDelete", { n: fileIds.length }))) return;
+
+  ifcDeleteSelectedBtn.disabled = true;
+  try {
+    const response = await fetch(`/api/ifc/projects/${encodeURIComponent(projectId)}/files/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_ids: fileIds }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(formatApiError(data.detail, response.statusText));
+
+    fileIds.forEach((fileId) => {
+      selectedIfcFileIds.delete(fileId);
+      selectedIfcDeleteIds.delete(fileId);
+    });
+    currentStoreyFilter = "";
+    currentTypesFilter = [];
+    invalidateResults();
+    window.bimViewer?.clear();
+    if (typeof clearSustainabilityResults === "function") {
+      sustainabilityState.requestToken += 1;
+      clearSustainabilityResults();
+    }
+    await loadIfcProjects();
+    await Promise.all([loadStoreys(), loadTypes(), loadResults()]);
+    if (typeof renderSustainabilityScope === "function") renderSustainabilityScope();
+    logInfo(t("pipeline.deleted", { n: data.deleted_files || 0 }));
+  } catch (err) {
+    logError(t("pipeline.deleteFailed"), err.message || err);
+    updateIfcSelectionControls();
+  }
+});
 
 ifcDropZone.addEventListener("click", () => ifcFileInput.click());
 
@@ -1666,7 +1914,17 @@ if (rescanDatasetBtn) {
 }
 projectIdInput.addEventListener("change", () => {
   selectedIfcFileIds.clear();
-  loadIfcProjects();
+  selectedIfcDeleteIds.clear();
+  currentStoreyFilter = "";
+  currentTypesFilter = [];
+  invalidateResults();
+  loadIfcProjects().finally(() => {
+    if (activeNav === "results") {
+      loadStoreys();
+      loadTypes();
+      loadResults();
+    }
+  });
 });
 
 // Handle clicking "Apply Filters" on the Results table
@@ -1676,10 +1934,7 @@ if (applyBtn) {
         const storeySelect = document.getElementById('storeyFilter');
         currentStoreyFilter = storeySelect ? storeySelect.value : "";
 
-        const typeSelect = document.getElementById('typeFilter');
-        currentTypesFilter = typeSelect
-            ? Array.from(typeSelect.selectedOptions).map(opt => opt.value)
-            : [];
+        currentTypesFilter = resultTypeDropdown.getFilterValue() || [];
 
         loadResults();
     });
@@ -1692,8 +1947,7 @@ if (clearFiltersBtn) {
         const storeySelect = document.getElementById('storeyFilter');
         if (storeySelect) storeySelect.value = "";
 
-        const typeSelect = document.getElementById('typeFilter');
-        if (typeSelect) Array.from(typeSelect.options).forEach(opt => (opt.selected = false));
+        resultTypeDropdown.selectAll();
 
         currentStoreyFilter = "";
         currentTypesFilter = [];
@@ -1715,11 +1969,12 @@ document.addEventListener("languagechange", () => {
   // Dropdown toggle labels / option lists hold live selection state.
   ingestStoreyDropdown.relabel();
   ingestTypeDropdown.relabel();
+  resultTypeDropdown.relabel();
 
-  // "All storeys" is the only translated <option>; the rest are storey names.
+  // The explicit storey "All" option is translated; IFC names stay intact.
   const storeySelect = document.getElementById("storeyFilter");
-  const allOption = storeySelect && storeySelect.querySelector('option[value=""]');
-  if (allOption) allOption.textContent = t("results.allStoreys");
+  const allStoreysOption = storeySelect && storeySelect.querySelector('option[value=""]');
+  if (allStoreysOption) allStoreysOption.textContent = t("results.allStoreys");
 
   // Panels whose entire body is generated. Each of these is a cheap re-render
   // of already-fetched data except the two that must hit the API again to

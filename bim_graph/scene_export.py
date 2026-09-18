@@ -19,10 +19,10 @@ rotation. The mapping from the IFC/Neo4j frame is::
     gltf_x = ifc_x    gltf_y = ifc_z    gltf_z = -ifc_y
 
 verified element-for-element against the ``minX..maxZ`` properties stored in
-Neo4j (see tests/test_scene_export.py). Geometry stays in *project file units*
--- feet for the reference model -- because every stored bbox and clash metric
-is in file units. Rescaling here would desynchronise the viewer from the
-numbers the rest of the platform reports.
+Neo4j (see tests/test_scene_export.py). The shared IfcOpenShell geometry
+settings keep ``CONVERT_BACK_UNITS=False``: tessellated vertices, stored AABBs,
+clash metrics, and exported scenes therefore use the same canonical metre
+coordinate contract.
 """
 
 from __future__ import annotations
@@ -171,6 +171,32 @@ def prune_manifest(project_id: str, file_ids: list[str]) -> dict[str, Any]:
         return _write_manifest(project_id, manifest)
 
 
+def reconcile_scene_scope(keep_by_project: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
+    """Make generated scene storage match the models that remain in the graph.
+
+    This is used after a global graph wipe. It removes stale file directories
+    even when a manifest is missing/corrupt, while retaining only explicitly
+    listed project/file pairs. Original IFC files live elsewhere and are never
+    touched.
+    """
+    normalized = {project_id: set(file_ids) for project_id, file_ids in keep_by_project.items()}
+    project_ids = set(normalized)
+    if SCENES_ROOT.exists():
+        project_ids.update(path.name for path in SCENES_ROOT.iterdir() if path.is_dir())
+
+    results: dict[str, dict[str, Any]] = {}
+    for project_id in sorted(project_ids):
+        keep = normalized.get(project_id, set())
+        manifest = prune_manifest(project_id, sorted(keep))
+        project_dir = SCENES_ROOT / project_id
+        if project_dir.is_dir():
+            for child in project_dir.iterdir():
+                if child.is_dir() and child.name not in keep:
+                    _remove_scene_directory(project_id, child.name)
+        results[project_id] = manifest
+    return results
+
+
 def _remove_scene_directory(project_id: str, file_id: str) -> None:
     """Delete one file's exported scenes, refusing anything outside SCENES_ROOT."""
     directory = scene_directory(project_id, file_id)
@@ -255,8 +281,8 @@ class SceneWriter:
         serializer = geom.serializers.gltf(str(scene_path(self.project_id, self.file_id, key)),
                                           self._geometry_settings, settings)
         serializer.setFile(self._model)
-        # Metadata only; verified not to rescale geometry, which stays in
-        # project file units to match the stored bounding boxes.
+        # Metadata only; geometry already follows the extractor's canonical
+        # metre contract and therefore stays aligned with stored AABBs.
         serializer.setUnitNameAndMagnitude("METER", 1.0)
         serializer.writeHeader()
         self._serializers[key] = serializer
@@ -320,6 +346,9 @@ class SceneWriter:
         entry = {
             "file_id": self.file_id,
             "source_ifc_file": self.source_ifc_file,
+            "geometry_unit": "metre",
+            # Retained as source-model provenance and for backward-compatible
+            # manifests. It is not the output scene/AABB coordinate scale.
             "unit_scale_to_metre": self.unit_scale_to_metre,
             "generated_at": _utc_now(),
             "failed_elements": self.failed_elements,

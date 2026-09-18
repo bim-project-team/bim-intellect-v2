@@ -40,12 +40,14 @@ from extract_graph import run_multi_extraction
 from bim_graph.coordinate_system import inspect_coordinate_system, validate_federation
 from bim_graph.scene_export import (
     SCENES_ROOT, UNASSIGNED_SCENE_KEY, ifc_bbox_to_gltf, prune_manifest,
-    read_manifest, scene_key as scene_key_for, scene_path,
+    read_manifest, reconcile_scene_scope, scene_key as scene_key_for, scene_path,
 )
 from bim_graph.project_registry import (
     PROJECT_ROOT, get_files, list_projects, register_uploaded_file, safe_id,
-    update_file, utc_now, list_unregistered_ifc_files,
+    update_file, utc_now, list_unregistered_ifc_files, mark_all_files_not_in_graph,
+    remove_files,
 )
+from bim_graph.project_cleanup import delete_ifc_file_scope
 from bim_graph.pipeline_lock import PIPELINE_LOCK
 from api.sustainability_routes import router as sustainability_router
 
@@ -128,6 +130,14 @@ class ProjectIngestRequest(BaseModel):
     build_scenes: bool = True
 
 
+class IFCFileDeleteRequest(BaseModel):
+    file_ids: List[str]
+
+
+class RAGDocumentDeleteRequest(BaseModel):
+    document_ids: List[str]
+
+
 # ------------------------------------------------------------------
 # RAG module discovery
 # ------------------------------------------------------------------
@@ -161,6 +171,7 @@ def _ensure_rag():
             from rag.embedder import get_client_db as _get_client_db
             from rag.embedder import get_or_create_collection as _get_or_create_collection
             from rag.embedder import delete_document as _delete_document
+            from rag.embedder import delete_documents as _delete_documents
             from rag.embedder import list_indexed_documents as _list_indexed_documents
             from rag.embedder import CHROMA_DIR as _CHROMA_DIR
             from rag.embedder import COLLECTION_NAME as _COLLECTION_NAME
@@ -169,6 +180,7 @@ def _ensure_rag():
                 "get_client_db": _get_client_db,
                 "get_or_create_collection": _get_or_create_collection,
                 "delete_document": _delete_document,
+                "delete_documents": _delete_documents,
                 "list_indexed_documents": _list_indexed_documents,
                 "CHROMA_DIR": _CHROMA_DIR,
                 "COLLECTION_NAME": _COLLECTION_NAME,
@@ -376,6 +388,73 @@ def get_ifc_projects():
     return {"projects": list_projects(), "legacy_unregistered_files": list_unregistered_ifc_files()}
 
 
+@router.post("/ifc/projects/{project_id}/files/delete")
+def delete_ifc_project_files(project_id: str, req: IFCFileDeleteRequest):
+    """Delete selected registered models and their project/file-owned data."""
+    project_id = safe_id(project_id)
+    file_ids = sorted(set(safe_id(value, "") for value in req.file_ids if value.strip()))
+    file_ids = [value for value in file_ids if value]
+    if not file_ids:
+        raise HTTPException(400, "Select at least one registered IFC file.")
+
+    records = get_files(project_id, file_ids)
+    known_ids = {record["file_id"] for record in records}
+    missing = sorted(set(file_ids) - known_ids)
+    if missing:
+        raise HTTPException(404, f"Unknown file IDs for project {project_id}: {missing}")
+
+    # Uploaded IFCs must live under this project's managed storage directory.
+    # Refuse an unexpected registry path before changing graph or registry state.
+    project_dir = (PROJECT_ROOT / project_id).resolve()
+    stored_paths: list[Path] = []
+    for record in records:
+        path = Path(record.get("stored_path") or "").resolve()
+        if not path.is_relative_to(project_dir):
+            raise HTTPException(
+                409,
+                f"Registered IFC path is outside managed project storage: {record['file_id']}",
+            )
+        stored_paths.append(path)
+
+    with _PIPELINE_LOCK:
+        try:
+            with Neo4jClient() as client:
+                client.verify_connectivity()
+                graph_cleanup = delete_ifc_file_scope(client, project_id, file_ids)
+
+            removed = remove_files(project_id, file_ids)
+            remaining = get_files(project_id)
+            remaining_ingested = [
+                item["file_id"] for item in remaining if item.get("status") == "ingested"
+            ]
+            manifest = prune_manifest(project_id, remaining_ingested)
+
+            files_deleted = 0
+            for path in stored_paths:
+                if path.is_file():
+                    path.unlink()
+                    files_deleted += 1
+            try:
+                project_dir.rmdir()  # only succeeds when no sibling files remain
+            except OSError:
+                pass
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, f"IFC deletion failed: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "deleted_file_ids": [record["file_id"] for record in removed],
+        "deleted_files": len(removed),
+        "stored_files_deleted": files_deleted,
+        "remaining_files": len(remaining),
+        "graph_cleanup": graph_cleanup,
+        "scenes": manifest,
+    }
+
+
 @router.post("/ifc/projects/{project_id}/ingest")
 def ingest_ifc_project(project_id: str, req: ProjectIngestRequest):
     project_id = safe_id(project_id)
@@ -405,6 +484,11 @@ def ingest_ifc_project(project_id: str, req: ProjectIngestRequest):
                 nodes_csv=NODES_CSV, edges_csv=EDGES_CSV,
                 reset=req.reset_all, project_id=None if req.reset_all else project_id,
             )
+            if req.reset_all:
+                # The database wipe affects every project. Keep the registry and
+                # generated viewer assets equally honest before marking this
+                # request's successful files as the new graph scope.
+                load_summary["registry_files_removed_from_graph"] = mark_all_files_not_in_graph()
             per_file_map = {item["file_id"]: item for item in per_file}
             selected_ids = successful_ids
             for existing in get_files(project_id):
@@ -416,25 +500,31 @@ def ingest_ifc_project(project_id: str, req: ProjectIngestRequest):
                     update_file(
                         project_id, record["file_id"], status="ingested", processing_status="imported",
                         ingested_at=utc_now(), node_count=counts["nodes"], edge_count=counts["edges"], error=None,
+                        coordinate_system=record.get("coordinate_system"),
                     )
                 else:
                     update_file(
                         project_id, record["file_id"], status="uploaded", processing_status="failed",
-                        error=counts.get("error"),
+                        error=counts.get("error"), coordinate_system=record.get("coordinate_system"),
                     )
+            # Keep the viewer's manifest honest: a file dropped from the graph
+            # must stop being offered as viewable geometry, or the 3D map would
+            # show a model the answers can no longer reason about. Reconcile
+            # before optional analysis so a clash failure cannot leave scenes
+            # from the graph that was already wiped/replaced.
+            ingested_file_ids = [
+                item["file_id"] for item in get_files(project_id) if item.get("status") == "ingested"
+            ]
+            if req.reset_all:
+                reconcile_scene_scope({project_id: ingested_file_ids})
+            else:
+                prune_manifest(project_id, ingested_file_ids)
             analysis = None
             if req.run_clash_detection:
                 analysis = clash_pipeline.run_clash_detection(project_id=project_id, file_ids=sorted(successful_ids))
                 for record in records:
                     if record["file_id"] in successful_ids:
                         update_file(project_id, record["file_id"], processing_status="analyzed", analyzed_at=utc_now())
-            # Keep the viewer's manifest honest: a file dropped from the graph
-            # must stop being offered as viewable geometry, or the 3D map would
-            # show a model the answers can no longer reason about.
-            prune_manifest(
-                project_id,
-                [item["file_id"] for item in get_files(project_id) if item.get("status") == "ingested"],
-            )
             return {
                 "status": "ok" if len(successful_ids) == len(records) else "partial_success",
                 "project_id": project_id, "alignment": alignment,
@@ -490,7 +580,10 @@ def get_dataset_filters(
 
 
 @router.get("/filters/storeys")
-def get_available_storeys():
+def get_available_storeys(
+    project_id: Optional[str] = None,
+    file_id: Optional[List[str]] = Query(None),
+):
     """
     Dynamically searches the Neo4j graph for available storeys, so the
     Results tab filter reflects whatever was actually ingested (post
@@ -501,10 +594,15 @@ def get_available_storeys():
             query = """
             MATCH (n:Element)
             WHERE n.storeyName IS NOT NULL AND n.storeyName <> ""
+              AND ($project_id IS NULL OR n.projectId = $project_id)
+              AND (size($file_ids) = 0 OR n.sourceFileId IN $file_ids)
             RETURN DISTINCT n.storeyName AS storey
             ORDER BY storey
             """
-            records = client.run(query)
+            records = client.run(query, {
+                "project_id": safe_id(project_id) if project_id else None,
+                "file_ids": [safe_id(value) for value in (file_id or [])],
+            })
             return {"storeys": [r["storey"] for r in records]}
     except Exception as e:
         print(f"[routes] /filters/storeys failed: {e}", file=sys.stderr)
@@ -512,7 +610,10 @@ def get_available_storeys():
 
 
 @router.get("/filters/types")
-def get_available_types():
+def get_available_types(
+    project_id: Optional[str] = None,
+    file_id: Optional[List[str]] = Query(None),
+):
     """
     Dynamically searches the Neo4j graph for the IFC types actually
     present, for the Results tab's type filter (mirrors /filters/storeys).
@@ -522,17 +623,22 @@ def get_available_types():
             query = """
             MATCH (n:Element)
             WHERE n.ifcType IS NOT NULL AND n.ifcType <> ""
+              AND ($project_id IS NULL OR n.projectId = $project_id)
+              AND (size($file_ids) = 0 OR n.sourceFileId IN $file_ids)
             RETURN DISTINCT n.ifcType AS type
             ORDER BY type
             """
-            records = client.run(query)
+            records = client.run(query, {
+                "project_id": safe_id(project_id) if project_id else None,
+                "file_ids": [safe_id(value) for value in (file_id or [])],
+            })
             return {"types": [r["type"] for r in records]}
     except Exception as e:
         print(f"[routes] /filters/types failed: {e}", file=sys.stderr)
         return {"types": [], "error": str(e)}
 
 
-def _run_issue_query(issue_type, storey, types, project_id=None):
+def _run_issue_query(issue_type, storey, types, project_id=None, file_ids=None):
     """
     Shared Cypher for /clashes, /violations, /issues. Property names here
     must match what load_to_neo4j.py / clash_pipeline.py actually write:
@@ -563,6 +669,12 @@ def _run_issue_query(issue_type, storey, types, project_id=None):
         if project_id:
             where_clauses.append("r.projectId = $project_id")
             params["project_id"] = safe_id(project_id)
+        normalized_file_ids = [safe_id(value) for value in (file_ids or [])]
+        if normalized_file_ids:
+            where_clauses.append(
+                "(a.sourceFileId IN $file_ids AND b.sourceFileId IN $file_ids)"
+            )
+            params["file_ids"] = normalized_file_ids
         where_string = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         query = f"""
@@ -570,12 +682,22 @@ def _run_issue_query(issue_type, storey, types, project_id=None):
         {where_string}
         RETURN a.id AS a_id, coalesce(a.ifcGuid, a.id) AS a_guid,
                a.ifcType AS a_type, a.name AS a_name,
-               a.sourceIfcFile AS a_source_ifc_file, a.discipline AS a_discipline,
+               coalesce(a.sourceIfcFile, r.sourceIfcFileA) AS a_source_ifc_file,
+               coalesce(a.sourceFileId, r.sourceFileIdA) AS a_source_file_id,
+               coalesce(a.discipline, r.disciplineA) AS a_discipline,
                b.id AS b_id, coalesce(b.ifcGuid, b.id) AS b_guid,
                b.ifcType AS b_type, b.name AS b_name,
-               b.sourceIfcFile AS b_source_ifc_file, b.discipline AS b_discipline,
+               coalesce(b.sourceIfcFile, r.sourceIfcFileB) AS b_source_ifc_file,
+               coalesce(b.sourceFileId, r.sourceFileIdB) AS b_source_file_id,
+               coalesce(b.discipline, r.disciplineB) AS b_discipline,
                r.issue AS issue, r.metric AS metric,
-               r.projectId AS project_id, r.crossFile AS cross_file,
+               coalesce(r.projectId, a.projectId, b.projectId) AS project_id,
+               coalesce(
+                 r.crossFile,
+                 a.sourceFileId <> b.sourceFileId,
+                 a.sourceIfcFile <> b.sourceIfcFile,
+                 false
+               ) AS cross_file,
                r[$anomaly_score_a_property] AS anomaly_score_a,
                r[$anomaly_score_b_property] AS anomaly_score_b,
                r[$combined_anomaly_score_property] AS combined_anomaly_score
@@ -583,31 +705,69 @@ def _run_issue_query(issue_type, storey, types, project_id=None):
         LIMIT 1000
         """
         records = client.run(query, params)
-        return [dict(r) for r in records]
+        output = []
+        for record in records:
+            row = dict(record)
+            row.update({
+                # Additive, client-friendly aliases. Existing a_*/b_* fields
+                # remain unchanged for backward compatibility.
+                "element_a_id": row.get("a_id"),
+                "element_a_guid": row.get("a_guid"),
+                "element_a_name": row.get("a_name"),
+                "element_a_type": row.get("a_type"),
+                "element_a_source_file": row.get("a_source_ifc_file"),
+                "element_a_source_file_id": row.get("a_source_file_id"),
+                "element_a_discipline": row.get("a_discipline"),
+                "element_b_id": row.get("b_id"),
+                "element_b_guid": row.get("b_guid"),
+                "element_b_name": row.get("b_name"),
+                "element_b_type": row.get("b_type"),
+                "element_b_source_file": row.get("b_source_ifc_file"),
+                "element_b_source_file_id": row.get("b_source_file_id"),
+                "element_b_discipline": row.get("b_discipline"),
+                "relation_scope": "CROSS-FILE" if bool(row.get("cross_file")) else "INTRA-FILE",
+            })
+            output.append(row)
+        return output
 
 
 @router.get("/clashes")
-def get_clashes_filtered(storey: Optional[str] = None, types: Optional[str] = None, project_id: Optional[str] = None):
+def get_clashes_filtered(
+    storey: Optional[str] = None,
+    types: Optional[str] = None,
+    project_id: Optional[str] = None,
+    file_id: Optional[List[str]] = Query(None),
+):
     try:
-        return _run_issue_query("CLASH", storey, types, project_id)
+        return _run_issue_query("CLASH", storey, types, project_id, file_id)
     except Exception as e:
         print(f"[routes] /clashes failed: {e}", file=sys.stderr)
         return []
 
 
 @router.get("/violations")
-def get_violations_filtered(storey: Optional[str] = None, types: Optional[str] = None, project_id: Optional[str] = None):
+def get_violations_filtered(
+    storey: Optional[str] = None,
+    types: Optional[str] = None,
+    project_id: Optional[str] = None,
+    file_id: Optional[List[str]] = Query(None),
+):
     try:
-        return _run_issue_query("CLEARANCE_VIOLATION", storey, types, project_id)
+        return _run_issue_query("CLEARANCE_VIOLATION", storey, types, project_id, file_id)
     except Exception as e:
         print(f"[routes] /violations failed: {e}", file=sys.stderr)
         return []
 
 
 @router.get("/issues")
-def get_issues_filtered(storey: Optional[str] = None, types: Optional[str] = None, project_id: Optional[str] = None):
+def get_issues_filtered(
+    storey: Optional[str] = None,
+    types: Optional[str] = None,
+    project_id: Optional[str] = None,
+    file_id: Optional[List[str]] = Query(None),
+):
     try:
-        return _run_issue_query(None, storey, types, project_id)
+        return _run_issue_query(None, storey, types, project_id, file_id)
     except Exception as e:
         print(f"[routes] /issues failed: {e}", file=sys.stderr)
         return []
@@ -948,6 +1108,32 @@ def rag_status():
         }
     except Exception as exc:
         raise HTTPException(500, f"Failed to query Chroma status: {exc}")
+
+
+@router.post("/rag/documents/delete")
+def rag_delete_documents(req: RAGDocumentDeleteRequest):
+    """Delete only chunks belonging to selected stable document IDs."""
+    _ensure_rag()
+    document_ids = list(dict.fromkeys(value.strip() for value in req.document_ids if value.strip()))
+    if not document_ids:
+        raise HTTPException(400, "Select at least one indexed document.")
+    try:
+        deleted_by_document = _RAG_EMBEDDER["delete_documents"](document_ids)
+        client = _RAG_EMBEDDER["get_client_db"]()
+        collection = _RAG_EMBEDDER["get_or_create_collection"](client)
+        remaining_documents = _RAG_EMBEDDER["list_indexed_documents"]()
+        return {
+            "status": "ok",
+            "document_ids": document_ids,
+            "deleted_documents": sum(1 for count in deleted_by_document.values() if count > 0),
+            "deleted_chunks": sum(deleted_by_document.values()),
+            "deleted_by_document": deleted_by_document,
+            "remaining_chunks": collection.count(),
+            "remaining_documents": len(remaining_documents),
+            "documents": remaining_documents,
+        }
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to delete indexed documents: {exc}") from exc
 
 
 @router.delete("/rag/clear")

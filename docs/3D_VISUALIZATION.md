@@ -109,10 +109,11 @@ camera framing, and pinned in `tests/test_scene_export.py` to values measured
 from real exported geometry. Negating Y swaps which corner is minimal, so bounds
 are re-derived rather than mapped corner to corner.
 
-Geometry stays in **project file units** — feet for the reference model. Every
-stored bounding box and clash metric is in file units, and the Results table
-already reports "Metric (model units)". Rescaling to metres would desynchronise
-the viewer from every number the platform reports.
+The shared IfcOpenShell settings use `CONVERT_BACK_UNITS=False`, so tessellated
+vertices, stored AABBs, and GLB scenes share the canonical **metre** coordinate
+contract. The manifest keeps `unit_scale_to_metre` as source-IFC provenance and
+adds `geometry_unit: metre`; the viewer must not apply that source scale again.
+Clearance metrics are metres and AABB clash metrics are overlap volume in m³.
 
 ## Deciding what to highlight
 

@@ -56,7 +56,7 @@ Files are first `uploaded`. They become `ingested` only after extraction and Neo
 | `GET /api/ifc/projects` | List projects, registered files, processing state, and legacy unregistered files. |
 | `POST /api/ifc/projects/{project_id}/ingest` | Extract/load selected `file_ids`, optionally run project-scoped clash detection. |
 | `POST /api/analyze?project_id=...&file_id=...` | Run analysis over one or repeated selected file IDs. |
-| `GET /api/issues?project_id=...` | Read provenance-aware clash results. `/clashes` and `/violations` expose the same provenance fields. |
+| `GET /api/issues?project_id=...&file_id=...` | Read provenance-aware results for one or repeated selected file IDs. `/clashes` and `/violations` expose the same scope and fields. |
 
 Example project ingestion request:
 
@@ -81,7 +81,9 @@ Files are never byte-concatenated or treated as if their local origins automatic
 - `IfcMapConversion` values when present;
 - an inspection fingerprint.
 
-IfcOpenShell geometry is generated with `USE_WORLD_COORDS=True`. Before a multi-file run, all models must use the same unit scale and expose a verifiable shared frame. Verification succeeds for matching map conversions, or for a matching world context plus a shared project GUID, site GUID, or georeference. A single file requires no federation check.
+IfcOpenShell geometry is generated with `USE_WORLD_COORDS=True` and `CONVERT_BACK_UNITS=False`. Before a multi-file run, all models must use the same declared unit scale and expose a verifiable shared frame. After compatible world contexts, true north, and known spatial placements are checked, verification can use a shared project/site/building GUID, an identical explicit map conversion, or matching non-generic project and building identities. Georeference agreement is retained as supporting evidence, but common placeholder latitude/longitude alone is not sufficient. A single file requires no federation check.
+
+This permits compatible discipline exports such as `model_0_arc.ifc` and `model_0_structure.ifc`, whose exporters regenerated project/site GUIDs but retained the same named project/building and aligned world geometry. Matching origins alone still fail closed for unrelated buildings.
 
 Different units produce `unit_mismatch`. Missing metadata produces `missing_coordinate_metadata`. Files with matching units but no verifiable common reference produce `unverified_alignment`. In all three multi-file failure cases, extraction/clash analysis stops rather than returning spatially incorrect results. The system deliberately does not guess or apply an unproven translation/rotation; align/federate those files in the authoring tool and upload them again.
 
@@ -102,7 +104,7 @@ The detector fetches all bounding boxes for the selected project/files and perfo
 Each clash retains:
 
 - graph ID, original GUID, type, and name for both elements;
-- source IFC filename and discipline for both elements;
+- source IFC filename, file ID, and discipline for both elements;
 - project ID;
 - `cross_file` boolean;
 - existing rule issue and metric fields;
@@ -123,7 +125,7 @@ In **Pipeline**:
 5. run project ingestion and clash detection;
 6. inspect the Results table, which shows both source filenames and marks cross-file findings.
 
-The reset checkbox remains explicit because it clears the entire graph. Normal project ingestion only replaces the selected project's graph.
+The reset checkbox remains explicit because it clears the entire graph. It also marks every other registry file as no longer present in the graph and removes its generated scene entries. Normal project ingestion only replaces the selected project's graph and preserves unrelated projects.
 
 ## Validation
 
@@ -140,6 +142,7 @@ python -m compileall -q api bim_graph rag extract_graph.py extract_sotreys_type.
 - The JSON project registry is appropriate for this single-process deployment. Multi-host production should move the registry and locking to a transactional database/job queue.
 - Geometry extraction and the shared CSV staging files are serialized in the API process; long jobs should eventually run in a background worker.
 - Coordinate validation is intentionally conservative. It does not solve or auto-register models that lack trustworthy common-reference metadata.
-- The existing clash threshold/metric follows the extractor's shared model-coordinate convention; mixed-unit projects are rejected, but explicit SI conversion of all stored geometry is a future migration.
+- Extracted vertices/AABBs and generated scenes use the canonical metre geometry contract. Clearance distance is measured in metres at a physical threshold of 0.25 m; clash metric is AABB overlap volume in m³. Declared source-unit mismatch remains a federation rejection.
+- IfcOpenShell geometry workers default to four to bound native memory on complex exports. Set `BIM_GEOMETRY_WORKERS` to tune this for the deployment.
 - Discipline is persisted and accepted by the backend but the current UI assigns the batch default `unspecified`; automatic discipline inference is intentionally avoided.
 - IFC files that cannot generate geometry are reported independently and are excluded from the successful combined graph.

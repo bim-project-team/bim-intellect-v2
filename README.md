@@ -104,7 +104,7 @@ Every answer carries a `visualization` block whose `reason` states what can be s
 
 Aggregate answers such as `count(r)` name no element, so `bim_graph/query_planner.py` pairs each plan with a hand-written parameterized identity query that reuses the same filters and parameters. Nothing asks a language model which elements matter.
 
-Project ingestion writes one glTF binary per storey under `dataset/ifc/scenes/`, reusing the tessellation the bounding-box pass already performs — measured at 55s combined versus 73s for bounding boxes alone across 10,887 elements. Each glTF node is named by the element's IFC GlobalId, which is the same identifier the graph stores as `ifcGuid`, so a highlight is a direct name lookup. Geometry stays in project file units to match every stored bounding box and clash metric. Set `build_scenes: false` on the ingest request to import graph data only; projects without exported scenes fall back to the bounding boxes the clash engine measured.
+Project ingestion writes one glTF binary per storey under `dataset/ifc/scenes/`, reusing the tessellation the bounding-box pass already performs — measured at 55s combined versus 73s for bounding boxes alone across 10,887 elements. Each glTF node is named by the element's IFC GlobalId, which is the same identifier the graph stores as `ifcGuid`, so a highlight is a direct name lookup. Scenes and stored bounding boxes share the extractor's canonical metre coordinates. Set `build_scenes: false` on the ingest request to import graph data only; projects without exported scenes fall back to the bounding boxes the clash engine measured.
 
 three.js is vendored under `static/vendor/three/` and resolved through an import map, so the viewer needs no bundler and no CDN at runtime.
 
@@ -210,6 +210,10 @@ Results are persisted as provenance-aware `CLASHES_WITH` relationships:
   projectId,
   sourceIfcFileA,
   sourceIfcFileB,
+  sourceFileIdA,
+  sourceFileIdB,
+  disciplineA,
+  disciplineB,
   ifcGuidA,
   ifcGuidB,
   crossFile
@@ -219,7 +223,7 @@ Results are persisted as provenance-aware `CLASHES_WITH` relationships:
 Important interpretation limits:
 
 - AABB overlap is conservative and is not exact solid/mesh intersection.
-- The fixed `0.25` threshold is not converted using IFC unit metadata; treat it as model units.
+- The physical clearance threshold is 0.25 m. IfcOpenShell output is pinned to the canonical metre geometry contract; incompatible declared source units cannot federate.
 - The engine does not produce clash points, intersection solids, or viewer markup.
 - Optional anomaly scores are review signals and never change deterministic `issue` or `metric` values.
 
@@ -347,7 +351,8 @@ docker-compose.client.yml    Full application deployment
 
 Start from [.env.example](.env.example). Important groups include:
 
-- `OPENROUTER_API_KEY` and model profile variables
+- `OPENROUTER_API_KEY`, model profile variables, and explicit
+  `RAG_ROUTER_MAX_TOKENS` / `RAG_FINAL_MAX_TOKENS` output limits
 - `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD`
 - `RAG_EMBEDDING_*`, `RAG_COLLECTION_NAME`, and `CHROMA_PERSIST_DIR`
 - retrieval/reranking counts, limits, models, and weights
@@ -409,6 +414,6 @@ The current project targets trusted development/private evaluation. Before publi
 - use shared durable storage for registry, conversations, vectors, and staging;
 - supply and govern an authoritative regional carbon-factor dataset; the bundled CSV is only a template;
 - treat AABB-derived quantities as low-quality estimates and LEED findings as non-certifying, session-scoped evidence;
-- normalize the clash threshold to physical units and confirm AABB candidates with exact geometry where required.
+- add configurable discipline/system-specific clearance profiles and confirm AABB candidates with exact geometry where required.
 
 See [REPORT.md](REPORT.md) for the verified operational limitations and recommended next work.

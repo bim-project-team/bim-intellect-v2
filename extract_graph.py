@@ -28,6 +28,7 @@ Called from the web app via:
 """
 
 import csv
+import os
 import sys
 import multiprocessing
 from pathlib import Path
@@ -81,6 +82,10 @@ SPATIAL_TYPES = ("IfcProject", "IfcSite", "IfcBuilding", "IfcBuildingStorey")
 
 geom_settings = geom.settings()
 geom_settings.set(geom_settings.USE_WORLD_COORDS, True)
+# Keep the geometry contract explicit: IfcOpenShell converts authored feet,
+# millimetres, etc. to SI metres. Clash clearance is therefore defined in
+# metres and never silently interpreted in each file's local unit.
+geom_settings.set(geom_settings.CONVERT_BACK_UNITS, False)
 # Perf tweaks: these skip work inside each create_shape() call without
 # changing the lazy, per-element/filtered call pattern below.
 # Bounding boxes don't need door/window cutouts subtracted from
@@ -89,6 +94,24 @@ geom_settings.set(geom_settings.USE_WORLD_COORDS, True)
 geom_settings.set(geom_settings.DISABLE_OPENING_SUBTRACTIONS, True)
 # Skip material resolution - not needed for bbox extraction.
 geom_settings.set(geom_settings.APPLY_DEFAULT_MATERIALS, False)
+
+
+def _geometry_worker_count() -> int:
+    """Bound IfcOpenShell parallelism to avoid exhausting native memory.
+
+    Complex exports can allocate substantial OpenCascade state per worker.
+    Using every logical CPU caused the real ``model_1_arc.ifc`` process to
+    terminate during tessellation on a high-core workstation. Four workers is
+    a conservative default; deployments can tune it explicitly without
+    changing extraction semantics.
+    """
+    available = max(1, multiprocessing.cpu_count())
+    raw = os.getenv("BIM_GEOMETRY_WORKERS", "4")
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        requested = 4
+    return max(1, min(requested, available))
 
 
 def extract_geometry_for(model, elements, scene_writer=None, storey_names=None):
@@ -115,7 +138,7 @@ def extract_geometry_for(model, elements, scene_writer=None, storey_names=None):
 
     storey_names = storey_names or {}
     iterator = geom.iterator(
-        geom_settings, model, multiprocessing.cpu_count(), include=elements
+        geom_settings, model, _geometry_worker_count(), include=elements
     )
     bbox_map = {}
     if iterator.initialize():

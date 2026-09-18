@@ -1928,6 +1928,45 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
   margin-block-end: 0;
 }
 
+.form-label-row,
+.file-management-actions,
+.selection-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.form-label-row {
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-block-end: 0.4rem;
+}
+
+.form-label-row .form-label {
+  margin-block-end: 0;
+}
+
+.file-management-actions {
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.selection-toggle {
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selection-toggle input,
+.selectable-file > input {
+  flex: 0 0 auto;
+}
+
+.deletion-toggle {
+  color: var(--danger, #8f1d1d);
+  font-weight: 600;
+}
+
 .filter-actions {
   display: flex;
   gap: 0.5rem;
@@ -1935,6 +1974,51 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 
 .table-container {
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.results-table-scroll {
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.results-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+html[dir="ltr"] .results-table-scroll { direction: ltr; }
+html[dir="rtl"] .results-table-scroll { direction: rtl; }
+
+.results-table {
+  min-width: 1760px;
+  width: max-content;
+}
+
+.results-table th,
+.results-table td {
+  min-width: 120px;
+}
+
+.results-table .element-summary,
+.results-table .source-file {
+  min-width: 180px;
+}
+
+.results-table .provenance-id {
+  display: inline-block;
+  max-width: 240px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.results-table .relation-scope {
+  white-space: nowrap;
+  font-weight: 700;
 }
 
 .data-table {
@@ -2165,6 +2249,11 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 
 .multiselect-option:hover {
   background: var(--surface);
+}
+
+.multiselect-all-option {
+  border-block-end: 1px solid var(--border-light);
+  font-weight: 700;
 }
 
 .multiselect-option .option-label {

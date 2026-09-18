@@ -29,6 +29,8 @@ tests/*
 !tests/test_sustainability_phase3.py
 !tests/test_rag_retrieval_improvements.py
 !tests/test_chat_markdown_ui.py
+!tests/test_ifc_pipeline_final_validation.py
+!tests/test_client_file_management.py
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/rag_regression_benchmark.json

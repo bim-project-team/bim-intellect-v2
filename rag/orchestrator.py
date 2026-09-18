@@ -602,9 +602,20 @@ def validate_leed_assessment_language(answer: str, assessment: LeedAssessment | 
     return True
 
 
-def _chat_callable(messages: list[dict], model: str, temperature: float = 0.0):
+def _chat_callable(
+    messages: list[dict],
+    model: str,
+    temperature: float = 0.0,
+    *,
+    max_tokens: int,
+):
     def _call():
-        return get_client().chat.completions.create(model=model, messages=messages, temperature=temperature)
+        return get_client().chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
     return _call
 
 
@@ -721,13 +732,17 @@ class RAGOrchestrator:
 
     def route(self, question: str, use_strong_models: bool = False) -> dict:
         """Backward-compatible standalone router used by diagnostics/tests."""
-        profile = get_model_profile(use_strong_models, getattr(self, "settings", SETTINGS))
+        # Some legacy diagnostics construct the orchestrator with ``__new__``
+        # because this standalone method does not need the retrievers.  Keep
+        # that supported while still applying the configured output cap.
+        settings = getattr(self, "settings", SETTINGS)
+        profile = get_model_profile(use_strong_models, settings)
         try:
             response = call_with_retries(
                 _chat_callable([
                     {"role": "system", "content": ROUTER_PROMPT},
                     {"role": "user", "content": question},
-                ], profile.router_model),
+                ], profile.router_model, max_tokens=settings.router_max_tokens),
                 op_name="query router",
             )
             return apply_routing_policy(question, _json_object(response.choices[0].message.content))
@@ -748,7 +763,7 @@ class RAGOrchestrator:
                 _chat_callable([
                     {"role": "system", "content": QUERY_UNDERSTANDING_PROMPT},
                     {"role": "user", "content": user_prompt},
-                ], profile.router_model),
+                ], profile.router_model, max_tokens=self.settings.router_max_tokens),
                 op_name="contextual query understanding",
             )
             decision = _json_object(response.choices[0].message.content)
@@ -875,7 +890,7 @@ class RAGOrchestrator:
                     {"role": "system", "content": CONVERSATION_PROMPT},
                     *state.messages[-4:],
                     {"role": "user", "content": question},
-                ], profile.final_model, 0.2),
+                ], profile.final_model, 0.2, max_tokens=self.settings.final_max_tokens),
                 op_name="conversation response",
             )
             return response.choices[0].message.content or "متوجه شدم."
@@ -925,7 +940,10 @@ class RAGOrchestrator:
         )
         try:
             response = call_with_retries(
-                _chat_callable([{"role": "user", "content": prompt}], profile.final_model),
+                _chat_callable(
+                    [{"role": "user", "content": prompt}], profile.final_model,
+                    max_tokens=self.settings.final_max_tokens,
+                ),
                 op_name="grounded final answer",
             )
             return response.choices[0].message.content or ""
@@ -984,7 +1002,10 @@ class RAGOrchestrator:
             f"{retrieval.vector_context}\n\nDraft:\n{answer}"
         )
         response = call_with_retries(
-            _chat_callable([{"role": "user", "content": prompt}], profile.final_model),
+            _chat_callable(
+                [{"role": "user", "content": prompt}], profile.final_model,
+                max_tokens=self.settings.final_max_tokens,
+            ),
             op_name="citation repair",
         )
         return response.choices[0].message.content or ""
@@ -1004,7 +1025,10 @@ class RAGOrchestrator:
             f"{retrieval.vector_context}\n\nDraft:\n{answer}"
         )
         response = call_with_retries(
-            _chat_callable([{"role": "user", "content": prompt}], profile.final_model),
+            _chat_callable(
+                [{"role": "user", "content": prompt}], profile.final_model,
+                max_tokens=self.settings.final_max_tokens,
+            ),
             op_name="answer completeness repair",
         )
         return response.choices[0].message.content or ""

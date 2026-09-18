@@ -330,7 +330,7 @@ Issue relationships receive `anomalyScoreA`, `anomalyScoreB`, and `combinedAnoma
 ### 6.8 Engineering limitations that must be understood
 
 - AABB overlap is conservative; rotated, curved, hollow, and irregular shapes can have overlapping envelopes without solid intersection.
-- The fixed clearance constant is `0.25`. Its source comment assumes feet (about three inches), but the engine does not convert the threshold from IFC unit metadata. The result UI correctly calls the metric “model units.” Production use should normalize geometry or convert a physical threshold explicitly.
+- The physical clearance constant is `0.25` metres. IfcOpenShell tessellation is pinned to `CONVERT_BACK_UNITS=False`, and AABBs, scenes, and clearance distances share that canonical metre contract. Declared unit mismatch still stops federation before extraction.
 - The ignore list is global, hard-coded, and does not consider system, material, discipline, tolerance class, or element-specific rules.
 - There is no severity ranking beyond issue type, metric, cross-file flag, and optional anomaly score.
 - The detector does not compute clash point, intersection solid, penetration direction, or visualization geometry.
@@ -568,7 +568,7 @@ These are current implementation constraints, not completed features:
 3. Add reviewed requirement-specific LEED evaluators before allowing positive/negative automated assessment states; do not add certification claims.
 4. Persist assessment history and generated report artifacts in durable project-scoped storage.
 5. Move extraction, ingestion, embedding, clash/sustainability analysis, and large reports to background jobs with progress, cancellation, retry, and timeouts.
-6. Normalize clash geometry/threshold to declared physical units and add exact geometry confirmation after the AABB broad phase.
+6. Add configurable discipline/system-specific clearance profiles and exact geometry confirmation after the AABB broad phase.
 7. Add authentication, project tenancy, role checks, restricted CORS/APOC, rate limits, upload limits, and audit logging.
 8. Share the Neo4j driver and replace swallowed infrastructure errors with explicit service responses.
 9. Add browser-level bilingual accessibility and responsive visual regression tests.

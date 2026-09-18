@@ -471,7 +471,7 @@ Optional `storey`, comma-separated `types`, and `project_id` filters match when 
 ### 6.7 Important limitations
 
 - An AABB overlap can be a false positive for rotated, hollow, curved, or irregular solids.
-- The source comment describes `0.25` as feet, while the implementation does not convert the threshold using IFC unit metadata. Treat it as model units until physical-unit normalization is implemented.
+- Clearance is a physical 0.25 m threshold. Extracted AABBs and GLB scenes share IfcOpenShell's canonical metre output contract; source-unit mismatch remains a federation error.
 - The engine does not return clash points, intersection solids, penetration direction, or viewer markup.
 - Ignore rules and clearance are global constants rather than system/discipline/tolerance profiles.
 - The synchronous analysis request can be expensive on dense models.
@@ -997,7 +997,7 @@ Confirm the selected models have `status=ingested` and that extracted nodes cont
 
 ### Unexpected clash volume or clearance
 
-Remember that metrics come from AABBs and the threshold is a fixed 0.25 model units. Check IFC units, world coordinates, ignored type pairs, and duplicate GUID behavior. Use exact geometry software to confirm critical findings.
+Remember that metrics come from AABBs and the clearance threshold is a fixed 0.25 m. Check IFC units, world coordinates, ignored type pairs, and duplicate GUID behavior. Use exact geometry software to confirm critical findings.
 
 ### Graph questions fail or return no rows
 

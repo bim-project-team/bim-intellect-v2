@@ -16,7 +16,13 @@ import pandas as pd
 
 from bim_graph.neo4j_client import Neo4jClient
 
-CLEARANCE_THRESHOLD = 0.25  # feet, ~3 inches - see detect_clashes.py for rationale
+# ``extract_graph.geom_settings`` explicitly keeps convert-back-units disabled,
+# so IfcOpenShell normalizes tessellated vertices to SI metres regardless of the
+# IFC's authored length unit. Preserve the established numeric behavior while
+# making its physical meaning explicit and testable.
+CLEARANCE_THRESHOLD_METRES = 0.25
+GEOMETRY_UNIT_SCALE_TO_METRE = 1.0
+CLEARANCE_THRESHOLD = CLEARANCE_THRESHOLD_METRES / GEOMETRY_UNIT_SCALE_TO_METRE
 
 IGNORE_TYPE_PAIRS = {
     frozenset({"IfcWallStandardCase", "IfcWallStandardCase"}),
@@ -58,15 +64,27 @@ SET r.issue = row.issue, r.metric = row.metric
     , r.projectId = row.project_id
     , r.sourceIfcFileA = row.a_source_ifc_file
     , r.sourceIfcFileB = row.b_source_ifc_file
+    , r.sourceFileIdA = row.a_source_file_id
+    , r.sourceFileIdB = row.b_source_file_id
+    , r.disciplineA = row.a_discipline
+    , r.disciplineB = row.b_discipline
     , r.ifcGuidA = row.a_ifc_guid
     , r.ifcGuidB = row.b_ifc_guid
     , r.crossFile = row.cross_file
 """
 
-CLEAR_PROJECT_ISSUES_QUERY = """
+CLEAR_SCOPED_ISSUES_QUERY = """
 MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element)
-WHERE r.projectId = $project_id
-  AND (size($file_ids) = 0 OR (a.sourceFileId IN $file_ids AND b.sourceFileId IN $file_ids))
+WHERE (
+    $project_id IS NULL
+    OR r.projectId = $project_id
+    OR (r.projectId IS NULL AND a.projectId = $project_id AND b.projectId = $project_id)
+  )
+  AND (
+    size($file_ids) = 0
+    OR a.sourceFileId IN $file_ids
+    OR b.sourceFileId IN $file_ids
+  )
 DELETE r
 """
 
@@ -112,7 +130,7 @@ def aabb_gap(a, b):
     return gaps
 
 
-def classify_pair(a, b):
+def classify_pair(a, b, clearance_threshold=CLEARANCE_THRESHOLD):
     gaps = aabb_gap(a, b)
     if all(g < 0 for g in gaps):
         volume = 1
@@ -122,18 +140,18 @@ def classify_pair(a, b):
 
     positive_gaps = [max(g, 0) for g in gaps]
     distance = sum(g ** 2 for g in positive_gaps) ** 0.5
-    if distance < CLEARANCE_THRESHOLD:
+    if distance < clearance_threshold:
         return "CLEARANCE_VIOLATION", distance
     return None, distance
 
 
-def detect(elements_df):
+def detect(elements_df, clearance_threshold=CLEARANCE_THRESHOLD):
     """Sweep-and-prune in shared world coordinates, including cross-file pairs."""
     results = []
     elements = sorted(elements_df.to_dict("records"), key=lambda row: row["min_x"])
     active = []
     for b in elements:
-        active = [a for a in active if a["max_x"] + CLEARANCE_THRESHOLD >= b["min_x"]]
+        active = [a for a in active if a["max_x"] + clearance_threshold >= b["min_x"]]
         for a in active:
             # A GlobalId identifies the same IFC object across discipline exports.
             # Comparing duplicate exports of that object would manufacture a clash.
@@ -142,7 +160,7 @@ def detect(elements_df):
                 continue
             if frozenset({a["type"], b["type"]}) in IGNORE_TYPE_PAIRS:
                 continue
-            label, value = classify_pair(a, b)
+            label, value = classify_pair(a, b, clearance_threshold)
             if label is None:
                 continue
             results.append({
@@ -152,6 +170,8 @@ def detect(elements_df):
                 "b_ifc_guid": b.get("ifc_guid", b["id"]),
                 "a_source_ifc_file": a.get("source_ifc_file"),
                 "b_source_ifc_file": b.get("source_ifc_file"),
+                "a_source_file_id": a.get("source_file_id"),
+                "b_source_file_id": b.get("source_file_id"),
                 "a_discipline": a.get("discipline"),
                 "b_discipline": b.get("discipline"),
                 "project_id": a.get("project_id") or b.get("project_id"),
@@ -169,8 +189,10 @@ MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element)
 WHERE $issue IS NULL OR r.issue = $issue
 RETURN a.id AS a_id, a.name AS a_name, a.ifcType AS a_type,
        coalesce(a.ifcGuid, a.id) AS a_guid, a.sourceIfcFile AS a_source_ifc_file,
+       a.sourceFileId AS a_source_file_id, a.discipline AS a_discipline,
        b.id AS b_id, b.name AS b_name, b.ifcType AS b_type,
        coalesce(b.ifcGuid, b.id) AS b_guid, b.sourceIfcFile AS b_source_ifc_file,
+       b.sourceFileId AS b_source_file_id, b.discipline AS b_discipline,
        r.issue AS issue, r.metric AS metric,
        r.projectId AS project_id, r.crossFile AS cross_file,
        r[$anomaly_score_a_property] AS anomaly_score_a,
@@ -249,7 +271,7 @@ def run_clash_detection(
         storey_count = df["storey_name"].nunique() if len(df) and "storey_name" in df else 0
         print(f"[clash] running AABB clash/clearance checks across {storey_count} storey label(s)...",
               flush=True)
-        clashes = detect(df) if len(df) else []
+        clashes = detect(df, CLEARANCE_THRESHOLD) if len(df) else []
         print(f"[clash] detected {len(clashes)} issue(s).", flush=True)
 
         anomaly_scores = None
@@ -286,8 +308,7 @@ def run_clash_detection(
 
         # A scoped rerun replaces prior results even when the new run finds zero
         # issues; otherwise stale project clashes would remain visible.
-        if project_id:
-            client.run(CLEAR_PROJECT_ISSUES_QUERY, query_params)
+        client.run(CLEAR_SCOPED_ISSUES_QUERY, query_params)
 
         if clashes:
             print(f"[clash] writing CLASHES_WITH relationship(s) back to the graph...", flush=True)
@@ -297,10 +318,12 @@ def run_clash_detection(
             print(f"[clash] written.", flush=True)
 
         summary_rows = client.run(
-            "MATCH ()-[r:CLASHES_WITH]->() "
-            "WHERE $project_id IS NULL OR r.projectId = $project_id "
+            "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
+            "WHERE ($project_id IS NULL OR r.projectId = $project_id) "
+            "AND (size($file_ids) = 0 OR "
+            "(a.sourceFileId IN $file_ids AND b.sourceFileId IN $file_ids)) "
             "RETURN r.issue AS issue, count(*) AS n ORDER BY n DESC",
-            {"project_id": project_id},
+            query_params,
         )
 
         print(f"[clash] done. {len(df)} elements checked, {len(clashes)} issue(s) detected.",

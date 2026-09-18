@@ -31,6 +31,12 @@ class RAGSettings:
     final_model: str = os.getenv("RAG_FINAL_MODEL", os.getenv("OPENROUTER_CHAT_MODEL", "openai/gpt-4o-mini"))
     strong_router_model: str = os.getenv("RAG_STRONG_ROUTER_MODEL", "google/gemini-2.5-flash")
     strong_final_model: str = os.getenv("RAG_STRONG_FINAL_MODEL", "anthropic/claude-sonnet-4.5")
+    # Always send an explicit output bound. Some OpenRouter providers otherwise
+    # price/check affordability against their full output context (64k for the
+    # configured Claude model), causing a 402 before generation even though a
+    # normal grounded answer needs only a small fraction of that budget.
+    router_max_tokens: int = _int("RAG_ROUTER_MAX_TOKENS", 1200)
+    final_max_tokens: int = _int("RAG_FINAL_MAX_TOKENS", 4096)
 
     embedding_provider: str = os.getenv("RAG_EMBEDDING_PROVIDER", "local")
     embedding_model: str = os.getenv(

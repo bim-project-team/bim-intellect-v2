@@ -23,14 +23,29 @@ def test_nonempty_ifc_filter_remains_a_trimmed_subset():
     assert extract_graph._normalize_optional_filter([" Level 6 ", "IfcWall"]) == ["Level 6", "IfcWall"]
 
 
-def coordinate_record(name, *, scale=1.0, project="project-guid", context=None):
+def coordinate_record(
+    name,
+    *,
+    scale=1.0,
+    project="project-guid",
+    context=None,
+    project_name=None,
+    building_name=None,
+    placement=None,
+):
+    identity = placement or [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     return {
         "filename": name,
         "coordinate_system": {
             "unit_scale_to_metre": scale,
             "project_guids": [project] if project else [],
             "site_guids": [],
-            "sites": [],
+            "projects": ([{"guid": project, "name": project_name, "long_name": None}]
+                         if project_name else []),
+            "sites": [{"guid": None, "name": "Site", "long_name": None,
+                       "placement": identity, "georef": None}],
+            "buildings": ([{"guid": None, "name": building_name, "long_name": None,
+                            "placement": identity}] if building_name else []),
             "contexts": context if context is not None else [{"wcs": [[1, 0], [0, 1]], "true_north": [0, 1]}],
             "map_conversions": [],
         },
@@ -41,6 +56,36 @@ def test_coordinate_validation_accepts_verified_shared_frame():
     result = validate_federation([coordinate_record("arch.ifc"), coordinate_record("mep.ifc")])
     assert result["compatible"] is True
     assert result["basis"] == "shared_project_guid"
+
+
+def test_coordinate_validation_accepts_shared_site_guid_when_project_guids_differ():
+    architecture = coordinate_record("arch.ifc", project="arch-project")
+    structure = coordinate_record("structure.ifc", project="structure-project")
+    architecture["coordinate_system"]["site_guids"] = ["shared-site"]
+    structure["coordinate_system"]["site_guids"] = ["shared-site"]
+
+    result = validate_federation([architecture, structure])
+
+    assert result["compatible"] is True
+    assert result["basis"] == "shared_site_guid"
+
+
+def test_coordinate_validation_accepts_matching_explicit_map_conversion():
+    architecture = coordinate_record("arch.ifc", project="arch-project")
+    structure = coordinate_record("structure.ifc", project="structure-project")
+    conversion = {
+        "Eastings": 500000.0, "Northings": 4000000.0,
+        "OrthogonalHeight": 12.0, "XAxisAbscissa": 1.0,
+        "XAxisOrdinate": 0.0, "Scale": 1.0,
+    }
+    architecture["coordinate_system"]["map_conversions"] = [conversion]
+    structure["coordinate_system"]["map_conversions"] = [conversion]
+
+    result = validate_federation([architecture, structure])
+
+    assert result["compatible"] is True
+    assert result["basis"] == "shared_map_conversion"
+    assert result["coordinate_reference"] == "shared_map_conversion"
 
 
 def test_coordinate_validation_rejects_unit_mismatch_and_unknown_alignment():
@@ -59,6 +104,154 @@ def test_coordinate_validation_rejects_missing_metadata():
     assert result["compatible"] is False
     assert result["status"] == "missing_coordinate_metadata"
     assert result["files"] == ["old.ifc"]
+
+
+def test_coordinate_validation_accepts_same_named_building_across_discipline_exports():
+    identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    architecture = coordinate_record(
+        "model_0_arc.ifc", project="architecture-guid",
+        project_name="Project_0", building_name="Building_0",
+        context=[{"wcs": identity, "true_north": [0, 1]}] * 5,
+    )
+    structure = coordinate_record(
+        "model_0_structure.ifc", project="structure-guid",
+        project_name="Project_0", building_name="Building_0",
+        context=[{"wcs": identity, "true_north": None}],
+    )
+
+    result = validate_federation([architecture, structure])
+
+    assert result["compatible"] is True
+    assert result["basis"] == "shared_project_and_building_identity"
+
+
+def test_coordinate_validation_does_not_trust_matching_world_origins_alone():
+    first = coordinate_record(
+        "building-a.ifc", project="a", project_name="Project A", building_name="Building A",
+    )
+    second = coordinate_record(
+        "building-b.ifc", project="b", project_name="Project B", building_name="Building B",
+    )
+
+    result = validate_federation([first, second])
+
+    assert result["compatible"] is False
+    assert result["status"] == "unverified_alignment"
+
+
+def test_coordinate_validation_does_not_trust_shared_placeholder_georeference():
+    first = coordinate_record(
+        "building-a.ifc", project="a", project_name="Project A", building_name="Building A",
+    )
+    second = coordinate_record(
+        "building-b.ifc", project="b", project_name="Project B", building_name="Building B",
+    )
+    placeholder = {"latitude": [0, 0, 0], "longitude": [0, 0, 0], "elevation": 0}
+    first["coordinate_system"]["sites"][0]["georef"] = placeholder
+    second["coordinate_system"]["sites"][0]["georef"] = placeholder
+
+    result = validate_federation([first, second])
+
+    assert result["compatible"] is False
+    assert result["status"] == "unverified_alignment"
+
+
+def test_coordinate_validation_does_not_trust_generic_project_and_building_names():
+    first = coordinate_record(
+        "arch.ifc", project="a", project_name="Project", building_name="Building",
+    )
+    second = coordinate_record(
+        "structure.ifc", project="b", project_name="Project", building_name="Building",
+    )
+
+    result = validate_federation([first, second])
+
+    assert result["compatible"] is False
+    assert result["status"] == "unverified_alignment"
+
+
+def test_coordinate_validation_warns_on_georef_conflict_when_local_identity_is_verified():
+    first = coordinate_record(
+        "arch.ifc", project="a", project_name="Campus", building_name="Tower",
+    )
+    second = coordinate_record(
+        "structure.ifc", project="b", project_name="Campus", building_name="Tower",
+    )
+    first["coordinate_system"]["sites"][0]["georef"] = {
+        "latitude": [10, 0, 0], "longitude": [20, 0, 0], "elevation": 0,
+    }
+    second["coordinate_system"]["sites"][0]["georef"] = {
+        "latitude": [30, 0, 0], "longitude": [40, 0, 0], "elevation": 0,
+    }
+
+    result = validate_federation([first, second])
+
+    assert result["compatible"] is True
+    assert result["basis"] == "shared_project_and_building_identity"
+    assert result["warnings"]
+
+
+def test_coordinate_validation_rejects_same_named_building_with_transform_mismatch():
+    shifted = [[1, 0, 0, 25], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    first = coordinate_record(
+        "arch.ifc", project="a", project_name="Campus", building_name="Tower",
+    )
+    second = coordinate_record(
+        "structure.ifc", project="b", project_name="Campus", building_name="Tower",
+        context=[{"wcs": shifted, "true_north": [0, 1]}], placement=shifted,
+    )
+
+    result = validate_federation([first, second])
+
+    assert result["compatible"] is False
+    assert result["status"] == "coordinate_frame_mismatch"
+
+
+def test_coordinate_validation_rejects_ambiguous_contexts_inside_one_file():
+    identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    shifted = [[1, 0, 0, 50], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    ambiguous = coordinate_record(
+        "arch.ifc", project_name="Campus", building_name="Tower",
+        context=[{"wcs": identity, "true_north": [0, 1]},
+                 {"wcs": shifted, "true_north": [0, 1]}],
+    )
+    structure = coordinate_record(
+        "structure.ifc", project_name="Campus", building_name="Tower",
+        context=[{"wcs": identity, "true_north": [0, 1]}],
+    )
+
+    result = validate_federation([ambiguous, structure])
+
+    assert result["compatible"] is False
+    assert result["status"] == "ambiguous_coordinate_frame"
+
+
+def test_coordinate_validation_rejects_nonfinite_or_nonpositive_units():
+    for scale in (0, -1, float("nan")):
+        result = validate_federation([
+            coordinate_record("a.ifc", scale=scale),
+            coordinate_record("b.ifc", scale=scale),
+        ])
+        assert result["compatible"] is False
+        assert result["status"] == "invalid_coordinate_metadata"
+
+
+def test_coordinate_validation_fails_closed_on_malformed_nested_metadata():
+    malformed = coordinate_record("bad.ifc")
+    malformed["coordinate_system"].update({
+        "project_guids": None,
+        "site_guids": "not-a-list",
+        "projects": "not-a-list",
+        "sites": None,
+        "buildings": [None, "bad"],
+        "contexts": None,
+        "map_conversions": None,
+    })
+
+    result = validate_federation([malformed, coordinate_record("good.ifc")])
+
+    assert result["compatible"] is False
+    assert result["status"] == "coordinate_frame_mismatch"
 
 
 def test_cross_file_clash_preserves_both_sources_and_guids():

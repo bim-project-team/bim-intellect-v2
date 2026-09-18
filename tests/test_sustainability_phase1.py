@@ -398,13 +398,21 @@ def test_project_scoped_service_aggregates_selected_files_without_cross_project_
             "project_id": "p", "file_id": "a", "filename": "a.ifc", "stored_path": "a.ifc",
             "discipline": "architecture", "status": "ingested",
             "coordinate_system": {"unit_scale_to_metre": 1.0, "project_guids": ["shared"],
-                                  "site_guids": [], "sites": [], "contexts": [{}], "map_conversions": []},
+                                  "site_guids": [], "sites": [], "contexts": [{
+                                      "wcs": [[1, 0, 0, 0], [0, 1, 0, 0],
+                                              [0, 0, 1, 0], [0, 0, 0, 1]],
+                                      "true_north": [0, 1],
+                                  }], "map_conversions": []},
         },
         {
             "project_id": "p", "file_id": "b", "filename": "b.ifc", "stored_path": "b.ifc",
             "discipline": "structure", "status": "ingested",
             "coordinate_system": {"unit_scale_to_metre": 1.0, "project_guids": ["shared"],
-                                  "site_guids": [], "sites": [], "contexts": [{}], "map_conversions": []},
+                                  "site_guids": [], "sites": [], "contexts": [{
+                                      "wcs": [[1, 0, 0, 0], [0, 1, 0, 0],
+                                              [0, 0, 1, 0], [0, 0, 0, 1]],
+                                      "true_north": [0, 1],
+                                  }], "map_conversions": []},
         },
     ]
     monkeypatch.setattr("sustainability.service.get_files", lambda project_id: records if project_id == "p" else [])
