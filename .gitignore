@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 
+.zcodeignore
+
 # IDE
 .idea/
 

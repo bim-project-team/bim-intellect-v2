@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from _api_source import backend_api_source
 from api import routes
 from bim_graph import project_registry, scene_export
 from bim_graph.project_cleanup import delete_ifc_file_scope
@@ -291,9 +292,9 @@ def test_frontend_file_management_provenance_scroll_menu_and_localization_contra
     assert '"results.intraFile": "INTRA-FILE"' in translations
     assert '"results.intraFile": "درون‌فایلی"' in translations
     assert '/static/style.css?v=16' in html
-    assert '/static/i18n.js?v=9' in html
+    assert '/static/i18n.js?v=10' in html
     assert '/static/viewer.js?v=2' in html
-    assert '/static/app.js?v=17' in html
+    assert '/static/app.js?v=18' in html
 
 
 def test_viewer_rename_documents_toolbar_and_results_export_scroll_contract():
@@ -303,7 +304,7 @@ def test_viewer_rename_documents_toolbar_and_results_export_scroll_contract():
     javascript = Path("static/app.js").read_text(encoding="utf-8")
     css = Path("static/style.css").read_text(encoding="utf-8")
     translations = Path("static/i18n.js").read_text(encoding="utf-8")
-    routes_src = Path("api/routes.py").read_text(encoding="utf-8")
+    routes_src = backend_api_source()
 
     # 3D Visualization entry point: renamed everywhere user-visible, cube icon,
     # labelled trigger with aria-label, and no "3D map" left in the markup.
@@ -382,8 +383,9 @@ def test_viewer_rename_documents_toolbar_and_results_export_scroll_contract():
     assert 'id="load-more-results-btn"' in html
     assert 'id="results-status"' in html and 'results-skeleton' in css
     assert '"results.loadError"' in translations and '"results.noResults"' in translations
-    # Instant client filters over the loaded rows.
-    assert 'id="results-search"' in html and 'id="source-model-filter"' in html
+    # Instant client filters over the loaded rows. The Source model filter was
+    # removed — search / sort / cross-file remain.
+    assert 'id="results-search"' in html and 'id="source-model-filter"' not in html
     assert 'id="results-sort"' in html and 'id="cross-file-filter"' in html
     assert 'function computeVisibleResults(' in javascript
     assert '"results.showingRange"' in translations

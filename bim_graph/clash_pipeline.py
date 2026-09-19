@@ -215,6 +215,139 @@ def list_issues(issue=None):
         })
 
 
+def _resolve_detector(*, enabled, checkpoint, detector, device):
+    """Return ``(detector, status)`` for the optional anomaly model.
+
+    A missing/broken checkpoint degrades to the authoritative rule engine
+    rather than failing the run, so the warning is surfaced here and the caller
+    keeps going with ``detector=None``.
+    """
+    status = "disabled"
+    if enabled and detector is None:
+        try:
+            from bim_graph.anomaly.inference import GraphAnomalyDetector
+            detector = GraphAnomalyDetector(
+                checkpoint or "artifacts/anomaly/graph_autoencoder.pt",
+                device=device,
+            )
+            status = "ready"
+        except Exception as exc:
+            warnings.warn(
+                f"Anomaly inference is unavailable ({exc}); continuing with authoritative rule checks.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            detector = None
+            status = "unavailable"
+    elif enabled:
+        status = "ready"
+    return detector, status
+
+
+def _fetch_elements(client, query_params):
+    """Read every in-scope element with a bounding box back out of the graph."""
+    print("[clash] fetching elements with bounding boxes from the graph...", flush=True)
+    df = pd.DataFrame(client.run(FETCH_QUERY, query_params))
+    print(f"[clash] fetched {len(df)} element(s).", flush=True)
+    if len(df) == 0:
+        print("[clash] WARNING: no elements with bounding boxes found — did the "
+              "ingestion step run first?", flush=True)
+    return df
+
+
+def _detect_clashes(df):
+    """Run the AABB sweep-and-prune over the fetched elements."""
+    storey_count = df["storey_name"].nunique() if len(df) and "storey_name" in df else 0
+    print(f"[clash] running AABB clash/clearance checks across {storey_count} storey label(s)...",
+          flush=True)
+    clashes = detect(df, CLEARANCE_THRESHOLD) if len(df) else []
+    print(f"[clash] detected {len(clashes)} issue(s).", flush=True)
+    return clashes
+
+
+def _score_anomalies(client, detector, clashes, combination):
+    """Enrich clashes with the optional graph anomaly model.
+
+    Returns ``(clashes, anomaly_scores, status)``. Any ML failure is swallowed
+    into a warning and degrades to rule-only results — the anomaly model is
+    advisory and must never block the authoritative clash output.
+    """
+    try:
+        print("[clash] scoring the BIM graph with the optional anomaly model...", flush=True)
+        anomaly_nodes = client.run(ANOMALY_NODE_FETCH_QUERY)
+        anomaly_edges = client.run(ANOMALY_EDGE_FETCH_QUERY)
+        anomaly_scores = detector.score_records(anomaly_nodes, anomaly_edges, source_file="<neo4j>")
+        if len(anomaly_scores):
+            from bim_graph.anomaly.inference import enrich_clash_results
+            clashes = enrich_clash_results(clashes, anomaly_scores, combination)
+            score_rows = [
+                {
+                    "id": row.IFC_GUID,
+                    "anomaly_score": float(row.Anomaly_Score),
+                    "feature_error": float(row.Feature_Error),
+                    "structural_error": float(row.Structural_Error),
+                    "is_anomaly": bool(row.Is_Anomaly),
+                }
+                for row in anomaly_scores.itertuples(index=False)
+            ]
+            client.run_batched(WRITE_ELEMENT_ANOMALY_QUERY, score_rows, batch_size=1000)
+        print(f"[clash] scored {len(anomaly_scores)} graph element(s).", flush=True)
+        return clashes, anomaly_scores, "scored"
+    except Exception as exc:
+        warnings.warn(
+            f"Anomaly scoring failed ({exc}); continuing with rule-only results.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return clashes, None, "failed"
+
+
+def _write_results(client, clashes, anomaly_scores, query_params):
+    """Replace the scoped CLASHES_WITH set with this run's results."""
+    # A scoped rerun replaces prior results even when the new run finds zero
+    # issues; otherwise stale project clashes would remain visible.
+    client.run(CLEAR_SCOPED_ISSUES_QUERY, query_params)
+    if not clashes:
+        return
+    print("[clash] writing CLASHES_WITH relationship(s) back to the graph...", flush=True)
+    client.run_batched(WRITE_CLASH_QUERY, clashes, batch_size=1000)
+    if anomaly_scores is not None:
+        client.run_batched(WRITE_CLASH_ANOMALY_QUERY, clashes, batch_size=1000)
+    print("[clash] written.", flush=True)
+
+
+SUMMARY_COUNT_QUERY = (
+    "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
+    "WHERE ($project_id IS NULL OR r.projectId = $project_id) "
+    "AND (size($file_ids) = 0 OR "
+    "(a.sourceFileId IN $file_ids AND b.sourceFileId IN $file_ids)) "
+    "RETURN r.issue AS issue, count(*) AS n ORDER BY n DESC"
+)
+
+
+def _build_summary(client, query_params, df, clashes, *, anomaly_model_enabled,
+                   anomaly_status, anomaly_scores, project_id, file_ids):
+    """Assemble the caller-facing summary dict (counts read back from the graph)."""
+    summary_rows = client.run(SUMMARY_COUNT_QUERY, query_params)
+    summary = {
+        "elements_checked": len(df),
+        "issues_detected": len(clashes),
+        "issues_by_type": {r["issue"]: r["n"] for r in summary_rows},
+    }
+    if anomaly_model_enabled:
+        summary.update({
+            "anomaly_status": anomaly_status,
+            "elements_scored": len(anomaly_scores) if anomaly_scores is not None else 0,
+        })
+    if project_id:
+        summary.update({
+            "project_id": project_id,
+            "selected_file_ids": file_ids,
+            "cross_file_issues": sum(1 for row in clashes if row.get("cross_file")),
+        })
+    return summary
+
+
 def run_clash_detection(
     *,
     anomaly_model_enabled=False,
@@ -231,120 +364,35 @@ def run_clash_detection(
     dict so a caller (e.g. the FastAPI /analyze endpoint) can report
     results without parsing stdout.
     """
-    detector = anomaly_detector
-    anomaly_status = "disabled"
-    if anomaly_model_enabled and detector is None:
-        try:
-            from bim_graph.anomaly.inference import GraphAnomalyDetector
-            detector = GraphAnomalyDetector(
-                anomaly_checkpoint or "artifacts/anomaly/graph_autoencoder.pt",
-                device=anomaly_device,
-            )
-            anomaly_status = "ready"
-        except Exception as exc:
-            warnings.warn(
-                f"Anomaly inference is unavailable ({exc}); continuing with authoritative rule checks.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            detector = None
-            anomaly_status = "unavailable"
-    elif anomaly_model_enabled:
-        anomaly_status = "ready"
+    detector, anomaly_status = _resolve_detector(
+        enabled=anomaly_model_enabled, checkpoint=anomaly_checkpoint,
+        detector=anomaly_detector, device=anomaly_device,
+    )
+    query_params = {"project_id": project_id, "file_ids": list(file_ids or [])}
 
     print(f"[clash] connecting to Neo4j...", flush=True)
     with Neo4jClient() as client:
         client.verify_connectivity()
         print(f"[clash] connected.", flush=True)
 
-        print(f"[clash] fetching elements with bounding boxes from the graph...", flush=True)
-        file_ids = list(file_ids or [])
-        query_params = {"project_id": project_id, "file_ids": file_ids}
-        rows = client.run(FETCH_QUERY, query_params)
-        df = pd.DataFrame(rows)
-        print(f"[clash] fetched {len(df)} element(s).", flush=True)
-
-        if len(df) == 0:
-            print(f"[clash] WARNING: no elements with bounding boxes found — did the "
-                  f"ingestion step run first?", flush=True)
-
-        storey_count = df["storey_name"].nunique() if len(df) and "storey_name" in df else 0
-        print(f"[clash] running AABB clash/clearance checks across {storey_count} storey label(s)...",
-              flush=True)
-        clashes = detect(df, CLEARANCE_THRESHOLD) if len(df) else []
-        print(f"[clash] detected {len(clashes)} issue(s).", flush=True)
+        df = _fetch_elements(client, query_params)
+        clashes = _detect_clashes(df)
 
         anomaly_scores = None
         if detector is not None:
-            try:
-                print("[clash] scoring the BIM graph with the optional anomaly model...", flush=True)
-                anomaly_nodes = client.run(ANOMALY_NODE_FETCH_QUERY)
-                anomaly_edges = client.run(ANOMALY_EDGE_FETCH_QUERY)
-                anomaly_scores = detector.score_records(anomaly_nodes, anomaly_edges, source_file="<neo4j>")
-                if len(anomaly_scores):
-                    from bim_graph.anomaly.inference import enrich_clash_results
-                    clashes = enrich_clash_results(clashes, anomaly_scores, anomaly_combination)
-                    score_rows = [
-                        {
-                            "id": row.IFC_GUID,
-                            "anomaly_score": float(row.Anomaly_Score),
-                            "feature_error": float(row.Feature_Error),
-                            "structural_error": float(row.Structural_Error),
-                            "is_anomaly": bool(row.Is_Anomaly),
-                        }
-                        for row in anomaly_scores.itertuples(index=False)
-                    ]
-                    client.run_batched(WRITE_ELEMENT_ANOMALY_QUERY, score_rows, batch_size=1000)
-                anomaly_status = "scored"
-                print(f"[clash] scored {len(anomaly_scores)} graph element(s).", flush=True)
-            except Exception as exc:
-                warnings.warn(
-                    f"Anomaly scoring failed ({exc}); continuing with rule-only results.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                anomaly_scores = None
-                anomaly_status = "failed"
+            clashes, anomaly_scores, anomaly_status = _score_anomalies(
+                client, detector, clashes, anomaly_combination,
+            )
 
-        # A scoped rerun replaces prior results even when the new run finds zero
-        # issues; otherwise stale project clashes would remain visible.
-        client.run(CLEAR_SCOPED_ISSUES_QUERY, query_params)
-
-        if clashes:
-            print(f"[clash] writing CLASHES_WITH relationship(s) back to the graph...", flush=True)
-            client.run_batched(WRITE_CLASH_QUERY, clashes, batch_size=1000)
-            if anomaly_scores is not None:
-                client.run_batched(WRITE_CLASH_ANOMALY_QUERY, clashes, batch_size=1000)
-            print(f"[clash] written.", flush=True)
-
-        summary_rows = client.run(
-            "MATCH (a:Element)-[r:CLASHES_WITH]->(b:Element) "
-            "WHERE ($project_id IS NULL OR r.projectId = $project_id) "
-            "AND (size($file_ids) = 0 OR "
-            "(a.sourceFileId IN $file_ids AND b.sourceFileId IN $file_ids)) "
-            "RETURN r.issue AS issue, count(*) AS n ORDER BY n DESC",
-            query_params,
+        _write_results(client, clashes, anomaly_scores, query_params)
+        summary = _build_summary(
+            client, query_params, df, clashes,
+            anomaly_model_enabled=anomaly_model_enabled, anomaly_status=anomaly_status,
+            anomaly_scores=anomaly_scores, project_id=project_id,
+            file_ids=query_params["file_ids"],
         )
-
         print(f"[clash] done. {len(df)} elements checked, {len(clashes)} issue(s) detected.",
               flush=True)
-
-        summary = {
-            "elements_checked": len(df),
-            "issues_detected": len(clashes),
-            "issues_by_type": {r["issue"]: r["n"] for r in summary_rows},
-        }
-        if anomaly_model_enabled:
-            summary.update({
-                "anomaly_status": anomaly_status,
-                "elements_scored": len(anomaly_scores) if anomaly_scores is not None else 0,
-            })
-        if project_id:
-            summary.update({
-                "project_id": project_id,
-                "selected_file_ids": file_ids,
-                "cross_file_issues": sum(1 for row in clashes if row.get("cross_file")),
-            })
         return summary
 
 

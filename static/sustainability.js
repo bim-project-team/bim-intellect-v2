@@ -1,5 +1,11 @@
 // Project-scoped Sustainability workspace. Carbon values are rendered from
 // backend deterministic results; this file performs no carbon calculation.
+//
+// Cross-file dependency: the functions below read app.js top-level bindings
+// (projectIdInput, selectedIfcFileIds, ifcProjects) and the i18n shim t().
+// Those are classic-script global lexical bindings, not window properties, so
+// they resolve at call time. This file is loaded before app.js, but it only
+// *calls* into them after DOMContentLoaded, once app.js has initialized.
 
 const sustainabilityProject = document.getElementById("sustainability-project");
 const sustainabilityScopeMode = document.getElementById("sustainability-scope-mode");

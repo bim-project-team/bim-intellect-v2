@@ -316,7 +316,6 @@ const resultsStatus = document.getElementById("results-status");
 const loadMoreResultsBtn = document.getElementById("load-more-results-btn");
 const viewCardsBtn = document.getElementById("view-cards-btn");
 const viewTableBtn = document.getElementById("view-table-btn");
-const sourceModelFilter = document.getElementById("source-model-filter");
 const resultsSearchInput = document.getElementById("results-search");
 const resultsSortSelect = document.getElementById("results-sort");
 const crossFileFilterCheckbox = document.getElementById("cross-file-filter");
@@ -574,20 +573,36 @@ async function fetchScenes(projectId, sceneKeys, fileIds) {  const wanted = new 
  * marks the opt-in IFC-type view, which is orientation rather than evidence, so
  * the footer says which of the two the user is looking at.
  */
-async function showInViewer(visualization, { related = false } = {}) {
-  if (!window.bimViewer) return;
+// Shared viewer chrome: attach the canvas, open the drawer, resolve the active
+// project, and put the panel into its loading state. Returns the resolved
+// projectId, or null if the viewer is unavailable (footer already updated).
+function beginViewerSession(requestedProjectId) {
+  if (!window.bimViewer) return null;
   window.bimViewer.attach(viewerCanvas);
   openDrawer(viewerPanel, viewerToggle);
 
-  const projectId = visualization.project_id || viewerProjectId();
+  const projectId = requestedProjectId || viewerProjectId();
   if (!projectId) {
     setViewerFooter([t("viewer.unavailable")]);
-    return;
+    return null;
   }
 
   viewerPlaceholder.classList.remove("hidden");
   viewerPlaceholder.textContent = t("viewer.loading");
   setViewerFooter([]);
+  return projectId;
+}
+
+// Shared failure state for both viewer entry points.
+function showViewerError(error) {
+  viewerPlaceholder.classList.remove("hidden");
+  viewerPlaceholder.textContent = t("viewer.empty");
+  setViewerFooter([`${t("common.error")}: ${error.message || error}`]);
+}
+
+async function showInViewer(visualization, { related = false } = {}) {
+  const projectId = beginViewerSession(visualization.project_id);
+  if (!projectId) return;
 
   const highlight = related ? [] : visualization.highlight || [];
   const relatedTypes = related ? visualization.related_types || [] : [];
@@ -648,9 +663,7 @@ async function showInViewer(visualization, { related = false } = {}) {
     }
     setViewerFooter(lines);
   } catch (error) {
-    viewerPlaceholder.classList.remove("hidden");
-    viewerPlaceholder.textContent = t("viewer.empty");
-    setViewerFooter([`${t("common.error")}: ${error.message || error}`]);
+    showViewerError(error);
   }
 }
 
@@ -1020,6 +1033,24 @@ document.querySelectorAll(".example-q").forEach((btn) => {
 // PDF Upload (drag & drop + click)
 // ------------------------------------------------------------------
 
+// Shared drag-and-drop chrome for both the PDF and IFC drop zones: suppress the
+// browser's default file handling and toggle the .dragover affordance. The
+// click / change / drop handlers differ per zone and stay at each call site.
+function setupDropZoneDrag(zoneEl) {
+  ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+    zoneEl.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+  ["dragenter", "dragover"].forEach((eventName) => {
+    zoneEl.addEventListener(eventName, () => zoneEl.classList.add("dragover"));
+  });
+  ["dragleave", "drop"].forEach((eventName) => {
+    zoneEl.addEventListener(eventName, () => zoneEl.classList.remove("dragover"));
+  });
+}
+
 dropZone.addEventListener("click", () => pdfFileInput.click());
 
 pdfFileInput.addEventListener("change", () => {
@@ -1028,20 +1059,7 @@ pdfFileInput.addEventListener("change", () => {
   dropZone.classList.toggle("has-file", selectedPdfFiles.length > 0);
 });
 
-["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
-  dropZone.addEventListener(eventName, (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-});
-
-["dragenter", "dragover"].forEach((eventName) => {
-  dropZone.addEventListener(eventName, () => dropZone.classList.add("dragover"));
-});
-
-["dragleave", "drop"].forEach((eventName) => {
-  dropZone.addEventListener(eventName, () => dropZone.classList.remove("dragover"));
-});
+setupDropZoneDrag(dropZone);
 
 dropZone.addEventListener("drop", (e) => {
   const files = Array.from(e.dataTransfer.files || []);
@@ -1071,10 +1089,6 @@ function showUploadStatus(text, isError) {
   uploadStatusText.textContent = text;
   uploadStatus.classList.remove("hidden", "success", "error");
   uploadStatus.classList.add(isError ? "error" : "success");
-}
-
-function hideUploadStatus() {
-  uploadStatus.classList.add("hidden");
 }
 
 function formatApiError(detail, fallback = "Unknown error") {
@@ -1165,20 +1179,24 @@ uploadForm.addEventListener("submit", async (e) => {
 // Corpus Status
 // ------------------------------------------------------------------
 
+// Sync a "select all" master checkbox (checked / indeterminate / disabled) and
+// its dependent action button from the selected vs available item counts.
+// Shared by the PDF-corpus and IFC-file delete controls.
+function syncSelectAll(masterCheckbox, actionButton, selectedCount, availableCount) {
+  if (masterCheckbox) {
+    masterCheckbox.checked = availableCount > 0 && selectedCount === availableCount;
+    masterCheckbox.indeterminate = selectedCount > 0 && selectedCount < availableCount;
+    masterCheckbox.disabled = availableCount === 0;
+  }
+  if (actionButton) actionButton.disabled = selectedCount === 0;
+}
+
 function updateCorpusSelectionControls() {
   const available = new Set(indexedDocuments.map((doc) => String(doc.document_id)));
   selectedDocumentIds = new Set(
     Array.from(selectedDocumentIds).filter((documentId) => available.has(documentId))
   );
-  if (corpusSelectAll) {
-    corpusSelectAll.checked = available.size > 0 && selectedDocumentIds.size === available.size;
-    corpusSelectAll.indeterminate = selectedDocumentIds.size > 0
-      && selectedDocumentIds.size < available.size;
-    corpusSelectAll.disabled = available.size === 0;
-  }
-  if (deleteCorpusSelectedBtn) {
-    deleteCorpusSelectedBtn.disabled = selectedDocumentIds.size === 0;
-  }
+  syncSelectAll(corpusSelectAll, deleteCorpusSelectedBtn, selectedDocumentIds.size, available.size);
 }
 
 async function loadCorpusStatus() {
@@ -1392,50 +1410,6 @@ function formatAnalyzeSummary(data) {
 // HTTP helpers
 // ------------------------------------------------------------------
 
-function addRepeatedParams(paramName, rawValue, searchParams) {
-  if (!rawValue) return;
-
-  if (Array.isArray(rawValue)) {
-      rawValue.filter(Boolean).forEach((v) => searchParams.append(paramName, v));
-      return;
-  }
-
-  rawValue
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .forEach((v) => searchParams.append(paramName, v));
-}
-
-function csvToRepeatedParams(paramName, rawValue, searchParams) {
-  if (!rawValue) return;
-  rawValue
-    .split(";")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .forEach((v) => searchParams.append(paramName, v));
-}
-
-async function postJSON(path, params) {
-  const url = new URL(path, window.location.origin);
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value === undefined || value === null || value === "") return;
-      if (Array.isArray(value)) {
-          value.forEach(v => url.searchParams.append(key, v));
-      } else {
-          url.searchParams.set(key, value);
-      }
-    });
-  }
-  const response = await fetch(url, { method: "POST" });
-  const data = await response.json().catch(() => ({ detail: "Non-JSON response" }));
-  if (!response.ok) {
-    throw new Error(`${response.status}: ${JSON.stringify(data)}`);
-  }
-  return data;
-}
-
 async function getJSON(path) {
   const response = await fetch(path);
   const data = await response.json().catch(() => []);
@@ -1505,8 +1479,8 @@ let resultsLoadToken = 0;
 // the languagechange re-render, and both views work from this list instead of
 // re-fetching or scraping the DOM.
 let lastResultsRows = [];
-// Rows after the instant client filters (search / source model / cross-file /
-// sort). Recomputed on every render cycle.
+// Rows after the instant client filters (search / cross-file / sort).
+// Recomputed on every render cycle.
 let visibleRowsCache = [];
 // Card-view pagination: render a bounded page and reveal more on demand, so a
 // 1000-row project never inserts thousands of DOM nodes at once.
@@ -1582,7 +1556,6 @@ async function loadResults() {
     const rows = await getJSON(url.pathname + url.search);
     if (loadToken !== resultsLoadToken) return;
     lastResultsRows = normalizeResultRows(rows);
-    populateSourceModelFilter();
     renderAllResults();
     logInfo(t("log.loadedRows", { n: lastResultsRows.length, tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }));
   } catch (err) {
@@ -1817,11 +1790,9 @@ function matchesResultsSearch(row, query) {
 
 function computeVisibleResults() {
   const query = (resultsSearchInput && resultsSearchInput.value || "").trim().toLowerCase();
-  const model = sourceModelFilter && sourceModelFilter.value || "";
   const crossOnly = Boolean(crossFileFilterCheckbox && crossFileFilterCheckbox.checked);
   const mode = resultsSortSelect && resultsSortSelect.value || "metric-desc";
   let rows = lastResultsRows;
-  if (model) rows = rows.filter((r) => r.aFile === model || r.bFile === model);
   if (crossOnly) rows = rows.filter((r) => r.crossFile);
   if (query) rows = rows.filter((r) => matchesResultsSearch(r, query));
   const byMetric = (a, b) => {
@@ -1834,16 +1805,6 @@ function computeVisibleResults() {
   else if (mode === "type") rows = [...rows].sort((a, b) => String(a.aType).localeCompare(String(b.aType)));
   else if (mode === "source-file") rows = [...rows].sort((a, b) => String(a.aFile).localeCompare(String(b.aFile)));
   return rows;
-}
-
-function populateSourceModelFilter() {
-  if (!sourceModelFilter) return;
-  const previous = sourceModelFilter.value;
-  const models = [...new Set(lastResultsRows.flatMap((r) => [r.aFile, r.bFile])
-    .filter((name) => name && name !== t("results.legacySource")))].sort();
-  sourceModelFilter.innerHTML = `<option value="" data-i18n="results.allModels">${escapeHtml(t("results.allModels"))}</option>`
-    + models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
-  if (models.includes(previous)) sourceModelFilter.value = previous;
 }
 
 function renderAllResults() {
@@ -1964,19 +1925,8 @@ function clashCopyText(row) {
  * just the pair's bounds, its storey scenes, and two highlights.
  */
 async function showClashInViewer(row) {
-  if (!window.bimViewer) return;
-  window.bimViewer.attach(viewerCanvas);
-  openDrawer(viewerPanel, viewerToggle);
-
-  const projectId = row.projectId || viewerProjectId();
-  if (!projectId) {
-    setViewerFooter([t("viewer.unavailable")]);
-    return;
-  }
-
-  viewerPlaceholder.classList.remove("hidden");
-  viewerPlaceholder.textContent = t("viewer.loading");
-  setViewerFooter([]);
+  const projectId = beginViewerSession(row.projectId);
+  if (!projectId) return;
 
   const highlight = [];
   if (row.aGuid) highlight.push({ ifc_guid: row.aGuid, element_id: row.aId, name: row.aName, ifc_type: row.aType });
@@ -2006,9 +1956,7 @@ async function showClashInViewer(row) {
     else if (!result.matched) lines.push(t("viewer.noMatch"));
     setViewerFooter(lines);
   } catch (error) {
-    viewerPlaceholder.classList.remove("hidden");
-    viewerPlaceholder.textContent = t("viewer.empty");
-    setViewerFooter([`${t("common.error")}: ${error.message || error}`]);
+    showViewerError(error);
   }
 }
 
@@ -2039,7 +1987,6 @@ resultsCards.addEventListener("click", async (event) => {
 // Instant controls: filter/sort the loaded rows and restart pagination.
 [
   [resultsSearchInput, "input"],
-  [sourceModelFilter, "change"],
   [resultsSortSelect, "change"],
   [crossFileFilterCheckbox, "change"],
 ].forEach(([element, eventName]) => {
@@ -2194,52 +2141,52 @@ if (resultsTopScroll && resultsTableScroll) {
 // is opened (for the Results tab filters). Both are graph-backed, so they
 // only reflect data after a successful /ingest, unlike the Pipeline tab's
 // storey/type dropdowns (which read the source IFC file directly).
-async function loadStoreys() {
+// Shared fetch for the Results-tab backend filters: scope the request to the
+// current project/file selection and drop the response if the scope changed
+// while it was in flight (race guard). The success body differs per filter.
+async function fetchScopedFilterData(path, onData) {
     const scopeKey = currentResultScopeKey();
     try {
-        const url = appendCurrentResultScope(new URL('/api/filters/storeys', window.location.origin));
+        const url = appendCurrentResultScope(new URL(path, window.location.origin));
         const response = await fetch(url.pathname + url.search);
         const data = await response.json();
         if (scopeKey !== currentResultScopeKey()) return;
-
-        const resultStoreySelect = document.getElementById('storeyFilter');
-        if (resultStoreySelect) {
-            const previous = resultStoreySelect.value;
-            resultStoreySelect.innerHTML = '';
-            const allOption = document.createElement('option');
-            allOption.value = '';
-            allOption.textContent = t('results.allStoreys');
-            allOption.setAttribute('data-i18n', 'results.allStoreys');
-            resultStoreySelect.appendChild(allOption);
-            (data.storeys || []).forEach(storey => {
-                const opt = document.createElement('option');
-                opt.value = storey;
-                opt.textContent = storey;
-                resultStoreySelect.appendChild(opt);
-            });
-            if (previous && (data.storeys || []).includes(previous)) {
-                resultStoreySelect.value = previous;
-            }
-        }
+        onData(data);
     } catch (error) {
-        console.error("Failed to load storeys:", error);
+        console.error(`Failed to load ${path}:`, error);
     }
 }
 
-async function loadTypes() {
-    const scopeKey = currentResultScopeKey();
-    try {
-        const url = appendCurrentResultScope(new URL('/api/filters/types', window.location.origin));
-        const response = await fetch(url.pathname + url.search);
-        const data = await response.json();
-        if (scopeKey !== currentResultScopeKey()) return;
+async function loadStoreys() {
+    await fetchScopedFilterData('/api/filters/storeys', (data) => {
+        const resultStoreySelect = document.getElementById('storeyFilter');
+        if (!resultStoreySelect) return;
+        const previous = resultStoreySelect.value;
+        const storeys = data.storeys || [];
+        resultStoreySelect.innerHTML = '';
+        const allOption = document.createElement('option');
+        allOption.value = '';
+        allOption.textContent = t('results.allStoreys');
+        allOption.setAttribute('data-i18n', 'results.allStoreys');
+        resultStoreySelect.appendChild(allOption);
+        storeys.forEach((storey) => {
+            const opt = document.createElement('option');
+            opt.value = storey;
+            opt.textContent = storey;
+            resultStoreySelect.appendChild(opt);
+        });
+        if (previous && storeys.includes(previous)) {
+            resultStoreySelect.value = previous;
+        }
+    });
+}
 
+async function loadTypes() {
+    await fetchScopedFilterData('/api/filters/types', (data) => {
         resultTypeDropdown.setOptions(
-            (data.types || []).map(type => ({ value: type, label: type }))
+            (data.types || []).map((type) => ({ value: type, label: type }))
         );
-    } catch (error) {
-        console.error("Failed to load types:", error);
-    }
+    });
 }
 
 // ------------------------------------------------------------------
@@ -2250,16 +2197,7 @@ function updateIfcSelectionControls() {
   const availableIds = new Set(currentProjectIfcFiles.map((item) => item.file_id));
   selectedIfcDeleteIds = new Set(Array.from(selectedIfcDeleteIds)
     .filter((fileId) => availableIds.has(fileId)));
-  const selectedCount = Array.from(selectedIfcDeleteIds)
-    .filter((fileId) => availableIds.has(fileId)).length;
-  if (ifcDeleteSelectAll) {
-    ifcDeleteSelectAll.checked = availableIds.size > 0 && selectedCount === availableIds.size;
-    ifcDeleteSelectAll.indeterminate = selectedCount > 0 && selectedCount < availableIds.size;
-    ifcDeleteSelectAll.disabled = availableIds.size === 0;
-  }
-  if (ifcDeleteSelectedBtn) {
-    ifcDeleteSelectedBtn.disabled = selectedCount === 0;
-  }
+  syncSelectAll(ifcDeleteSelectAll, ifcDeleteSelectedBtn, selectedIfcDeleteIds.size, availableIds.size);
 }
 
 function populateIngestFilterSelects(data) {
@@ -2458,20 +2396,7 @@ ifcFileInput.addEventListener("change", () => {
     if (ifcFileInput.files && ifcFileInput.files.length) uploadIfcFiles(ifcFileInput.files);
 });
 
-["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
-    ifcDropZone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    });
-});
-
-["dragenter", "dragover"].forEach((eventName) => {
-    ifcDropZone.addEventListener(eventName, () => ifcDropZone.classList.add("dragover"));
-});
-
-["dragleave", "drop"].forEach((eventName) => {
-    ifcDropZone.addEventListener(eventName, () => ifcDropZone.classList.remove("dragover"));
-});
+setupDropZoneDrag(ifcDropZone);
 
 ifcDropZone.addEventListener("drop", (e) => {
     const files = Array.from(e.dataTransfer.files || []);
@@ -2529,7 +2454,6 @@ if (clearFiltersBtn) {
         resultTypeDropdown.selectAll();
 
         if (resultsSearchInput) resultsSearchInput.value = "";
-        if (sourceModelFilter) sourceModelFilter.value = "";
         if (crossFileFilterCheckbox) crossFileFilterCheckbox.checked = false;
         if (resultsSortSelect) resultsSortSelect.value = "metric-desc";
 
@@ -2546,41 +2470,46 @@ if (clearFiltersBtn) {
 // i18n.js rewrites every element carrying data-i18n; anything this script
 // rendered dynamically has to be re-rendered here. Re-fetching would be
 // wasteful and would discard state, so each case re-renders from what is
-// already in hand.
-document.addEventListener("languagechange", () => {
-  syncWorkspaceHeader();
+// already in hand. Each concern lives in its own refresh function so the
+// handler below reads as a table of contents.
 
-  // Dropdown toggle labels / option lists hold live selection state.
+// Dropdown toggle labels / option lists hold live selection state. The
+// explicit storey "All" option is translated; IFC names stay intact.
+function refreshDropdownLabels() {
   ingestStoreyDropdown.relabel();
   ingestTypeDropdown.relabel();
   resultTypeDropdown.relabel();
 
-  // The explicit storey "All" option is translated; IFC names stay intact.
   const storeySelect = document.getElementById("storeyFilter");
   const allStoreysOption = storeySelect && storeySelect.querySelector('option[value=""]');
   if (allStoreysOption) allStoreysOption.textContent = t("results.allStoreys");
+}
 
-  // Panels whose entire body is generated. Each of these is a cheap re-render
-  // of already-fetched data except the two that must hit the API again to
-  // rebuild their markup; both are idempotent GETs.
+// Panels whose entire body is generated. Each is a cheap re-render of
+// already-fetched data except the two that must hit the API again to rebuild
+// their markup; both are idempotent GETs.
+function refreshActivePanel() {
   if (activeNav === "corpus") loadCorpusStatus();
   if (activeNav === "pipeline") loadIfcProjects();
+}
 
-  // The idle log line is the only translated content in the console.
+// The idle log line is the only translated content in the console.
+function refreshLogLabel() {
   const idle = log.querySelector(".log-muted");
   if (idle) idle.textContent = t("pipeline.logIdle");
+}
 
-  // The results table: re-render the placeholder row. Real rows contain
-  // element names from the model, which are not translated, so reloading them
-  // would cost a request for no benefit — but the card actions, badges, count
-  // line, and source-model "All models" option are UI strings, so loaded rows
-  // are re-rendered from memory (no fetch).
+// The results table: re-render the placeholder row. Real rows contain element
+// names from the model, which are not translated, so reloading them would cost
+// a request for no benefit — but the card actions, badges, and count line are
+// UI strings, so loaded rows are re-rendered from memory (no fetch). The status
+// strip's empty message is a plain UI string; the error keeps the backend's
+// detail text and re-translates only its prefix.
+function refreshResultsLabels() {
   const placeholder = resultsBody.querySelector("td.empty");
   if (placeholder && placeholder.hasAttribute("data-i18n")) {
     placeholder.textContent = t(placeholder.getAttribute("data-i18n"));
   }
-  // The status strip: the empty message is a plain UI string; the error keeps
-  // the backend's detail text and re-translates only its prefix.
   if (resultsStatus && !resultsStatus.classList.contains("hidden")) {
     if (resultsStatus.classList.contains("is-empty")) {
       resultsStatus.textContent = t("results.noResults");
@@ -2590,25 +2519,34 @@ document.addEventListener("languagechange", () => {
     }
   }
   if (lastResultsRows.length) {
-    populateSourceModelFilter();
     renderAllResults();
   } else {
     updateResultsMeta();
   }
+}
 
-  // Viewer buttons on past messages: relabel from the state stored on each
-  // element rather than replaying the conversation.
+// Viewer buttons on past messages: relabel from the state stored on each element
+// rather than replaying the conversation. The viewer's own footer/placeholder
+// text is left as-is when a scene is loaded: re-deriving it would need the
+// answer's payload, and the footer is refreshed on the next show() anyway.
+function refreshViewerLabels() {
   document.querySelectorAll(".chat-view-3d").forEach((button) => {
     button.textContent = viewerButtonLabel(
       button.dataset.viewerRelated === "true", button.dataset.viewerTypes || "",
     );
   });
-  // The viewer's own footer/placeholder text. Left as-is when a scene is
-  // loaded: re-deriving it would need the answer's payload, and the footer is
-  // refreshed on the next show() anyway.
   if (!viewerPlaceholder.classList.contains("hidden")) {
     viewerPlaceholder.textContent = t("viewer.empty");
   }
+}
+
+document.addEventListener("languagechange", () => {
+  syncWorkspaceHeader();
+  refreshDropdownLabels();
+  refreshActivePanel();
+  refreshLogLabel();
+  refreshResultsLabels();
+  refreshViewerLabels();
 });
 
 // ------------------------------------------------------------------
