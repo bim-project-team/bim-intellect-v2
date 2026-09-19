@@ -540,18 +540,27 @@ async function fetchElementsByIds(projectId, guids, fileIds) {
   return response.json();
 }
 
-/** Scene descriptors from the ingest-time manifest, restricted to the given keys. */
-async function fetchScenes(projectId, sceneKeys, fileIds) {  const wanted = new Set((sceneKeys || []).filter(Boolean));
+/**
+ * Scene descriptors from the ingest-time manifest, restricted to the given keys.
+ *
+ * Returns `{ scenes, totalScenes }` so callers can distinguish "this project
+ * genuinely has no exported geometry" from "geometry exists but the requested
+ * scene keys resolved to nothing" -- the viewer must never claim the former
+ * while the manifest lists scenes (see 3D_VISUALIZATION_CURRENT_ISSUE_AND_TEST_QUESTIONS.md §6).
+ */
+async function fetchScenes(projectId, sceneKeys, fileIds) {
+  const wanted = new Set((sceneKeys || []).filter(Boolean));
   const wantedFiles = new Set((fileIds || []).filter(Boolean));
-  if (!wanted.size) return [];
   const url = new URL("/api/model/manifest", window.location.origin);
   url.searchParams.set("project_id", projectId);
   const response = await fetch(url);
-  if (!response.ok) return [];
+  if (!response.ok) return { scenes: [], totalScenes: 0 };
   const manifest = await response.json();
   const scenes = [];
+  let totalScenes = 0;
   Object.entries(manifest.files || {}).forEach(([manifestFileId, file]) => {
     const fileId = file.file_id || manifestFileId;
+    totalScenes += (file.scenes || []).length;
     if (wantedFiles.size && !wantedFiles.has(fileId)) return;
     (file.scenes || []).forEach((scene) => {
       if (!wanted.has(scene.scene_key)) return;
@@ -564,7 +573,15 @@ async function fetchScenes(projectId, sceneKeys, fileIds) {  const wanted = new 
     });
   });
   // Smallest first, so the cap keeps the most scenes for the least bytes.
-  return scenes.sort((a, b) => a.bytes - b.bytes).slice(0, MAX_VIEWER_SCENES);
+  return {
+    scenes: scenes.sort((a, b) => a.bytes - b.bytes).slice(0, MAX_VIEWER_SCENES),
+    totalScenes,
+  };
+}
+
+/** The footer line for "no meshes loaded" -- honest about WHICH failure happened. */
+function viewerNoMeshMessage(totalScenes) {
+  return totalScenes > 0 ? t("viewer.mappingFailed") : t("viewer.boxFallback");
 }
 
 /**
@@ -606,7 +623,7 @@ async function showInViewer(visualization, { related = false } = {}) {
     const sceneKeys = related
       ? [...new Set(allBounds.map((item) => item.scene_key).filter(Boolean))]
       : requestedScenes;
-    const scenes = await fetchScenes(projectId, sceneKeys, scopedFileIds);
+    const { scenes, totalScenes } = await fetchScenes(projectId, sceneKeys, scopedFileIds);
 
     // In the evidence view only the cited elements get boxes. In the fallback
     // (no meshes at all) every returned element is drawn, otherwise a single
@@ -638,7 +655,7 @@ async function showInViewer(visualization, { related = false } = {}) {
     lines.push(t("viewer.elements", { n: drawn }));
     const storeys = scenes.map((scene) => scene.storeyName).filter(Boolean);
     if (storeys.length) lines.push(t("viewer.scenes", { names: storeys.join(" · ") }));
-    if (!result.loaded) lines.push(t("viewer.boxFallback"));
+    if (!result.loaded) lines.push(viewerNoMeshMessage(totalScenes));
     else if (highlight.length && !result.matched) lines.push(t("viewer.noMatch"));
     if (sceneKeys.length > scenes.length) {
       lines.push(t("viewer.sceneLimit", { shown: scenes.length, total: sceneKeys.length }));
@@ -1987,7 +2004,7 @@ async function showClashInViewer(row) {
     const data = await fetchElementsByIds(projectId, [row.aGuid, row.bGuid], fileIds);
     const allBounds = data.elements || [];
     const sceneKeys = [...new Set(allBounds.map((item) => item.scene_key).filter(Boolean))];
-    const scenes = await fetchScenes(projectId, sceneKeys, fileIds);
+    const { scenes, totalScenes } = await fetchScenes(projectId, sceneKeys, fileIds);
 
     const result = await window.bimViewer.show({
       sceneUrls: scenes.map((scene) => scene.url),
@@ -2002,7 +2019,7 @@ async function showClashInViewer(row) {
     const lines = [t("viewer.elements", { n: result.matched })];
     const storeys = scenes.map((scene) => scene.storeyName).filter(Boolean);
     if (storeys.length) lines.push(t("viewer.scenes", { names: storeys.join(" · ") }));
-    if (!result.loaded) lines.push(t("viewer.boxFallback"));
+    if (!result.loaded) lines.push(viewerNoMeshMessage(totalScenes));
     else if (!result.matched) lines.push(t("viewer.noMatch"));
     setViewerFooter(lines);
   } catch (error) {

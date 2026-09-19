@@ -239,6 +239,31 @@ def subject_ifc_types(question: str) -> list[str]:
     return matched
 
 
+def merge_element_records(
+    primary: list[dict[str, str]],
+    secondary: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Fill blank fields in ``primary`` from ``secondary``, keyed by IFC GUID.
+
+    The answer's own rows are the trusted order and identity; the plan's identity
+    query is only consulted to complete what they lack (usually ``storey_name``,
+    without which every element would resolve to the ``unassigned`` scene even
+    though a real storey scene exists in the manifest). Primary non-empty values
+    always win, and primary row order is preserved.
+    """
+    by_guid: dict[str, dict[str, str]] = {}
+    for element in secondary:
+        by_guid.setdefault(element["ifc_guid"], element)
+    merged: list[dict[str, str]] = []
+    for element in primary:
+        extra = by_guid.get(element["ifc_guid"])
+        if extra:
+            merged.append({**extra, **{k: v for k, v in element.items() if v}})
+        else:
+            merged.append(element)
+    return merged
+
+
 def scene_keys_for(elements: Iterable[dict[str, str]]) -> list[str]:
     """Scene keys covering the storeys of the given elements.
 

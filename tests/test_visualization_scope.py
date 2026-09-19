@@ -370,21 +370,76 @@ def test_retriever_runs_the_visualization_query_when_the_answer_is_an_aggregate(
     assert "count(r) AS issue_count" in client.executed[0]
 
 
-def test_retriever_skips_the_extra_query_when_results_already_name_elements(monkeypatch):
-    """No identity query is needed when the answer's own rows carry identity."""
+def test_retriever_skips_the_extra_query_when_results_are_complete(monkeypatch):
+    """No identity query is needed when the answer's own rows carry full identity,
+    including the storey that scene resolution depends on."""
     client = _FakeClient([[{
         # The planned listing's full contract, so the completeness check passes
         # and the run is not diverted into a corrective query.
         "issue_type": "CLASH", "metric": 2.5,
         "element_a_id": "A", "element_a_guid": "guid-a", "element_a_name": "Pipe",
+        "element_a_storey": "Ebene 5",
         "element_b_id": "B", "element_b_guid": "guid-b", "element_b_name": "Beam",
+        "element_b_storey": "Ebene 5",
     }]])
     monkeypatch.setattr(graph_retriever, "Neo4jClient", lambda: client)
     result = GraphRetriever().ask(
         "تداخل‌های بین IfcFlowSegment و IfcBeam را فهرست کن؛ نام و شناسه هر دو عنصر را ذکر کن"
     )
     assert [item["ifc_guid"] for item in result["elements"]] == ["guid-a", "guid-b"]
-    assert len(client.executed) == 1, "identity was already present; no extra query expected"
+    assert [item["storey_name"] for item in result["elements"]] == ["Ebene 5", "Ebene 5"]
+    assert len(client.executed) == 1, "complete identity; no extra query expected"
+
+
+def test_partial_identity_is_completed_from_the_plans_identity_query(monkeypatch):
+    """Rows that name elements but omit their storey must be completed, not used
+    as-is: a blank storey_name resolves every element to the `unassigned` scene
+    even though a real storey scene exists (the reported viewer bug)."""
+    client = _FakeClient([
+        [{
+            # Answer rows: full aggregate contract, element identity present,
+            # storey absent -- the reported bug's precondition.
+            "issue_type": "CLASH", "issue_count": 1, "metric": 8.3768,
+            "element_a_id": "default-project::model_0_arc-x::1$DZROIQX0RgNTaHr7NfS$",
+            "element_a_guid": "1$DZROIQX0RgNTaHr7NfS$", "element_a_name": "Roof",
+            "element_b_id": "default-project::model_0_structure-x::39hMvtcAHFA8CweEUbIYMM",
+            "element_b_guid": "39hMvtcAHFA8CweEUbIYMM", "element_b_name": "Slab 0.1500",
+        }],
+        [{
+            # The plan's identity query: same elements, storey projected.
+            "element_a_id": "default-project::model_0_arc-x::1$DZROIQX0RgNTaHr7NfS$",
+            "element_a_guid": "1$DZROIQX0RgNTaHr7NfS$", "element_a_name": "Roof",
+            "element_a_type": "IfcSlab", "element_a_storey": "Ebene 5",
+            "element_b_id": "default-project::model_0_structure-x::39hMvtcAHFA8CweEUbIYMM",
+            "element_b_guid": "39hMvtcAHFA8CweEUbIYMM", "element_b_name": "Slab 0.1500",
+            "element_b_type": "IfcSlab", "element_b_storey": "Storey",
+        }],
+    ])
+    monkeypatch.setattr(graph_retriever, "Neo4jClient", lambda: client)
+    result = GraphRetriever().ask(ISSUE_COUNTS)
+    assert [item["storey_name"] for item in result["elements"]] == ["Ebene 5", "Storey"]
+    assert len(client.executed) == 2, "identity query must run to fill the missing storey"
+    # Answer-row values win over the identity query's; nothing was lost.
+    assert result["elements"][0]["name"] == "Roof"
+
+
+def test_merge_element_records_fills_blanks_without_disturbing_primary():
+    from bim_graph.visualization import merge_element_records
+    primary = [
+        {"element_id": "A", "ifc_guid": "g-a", "name": "Wall A", "ifc_type": "IfcWall", "storey_name": ""},
+        {"element_id": "B", "ifc_guid": "g-b", "name": "", "ifc_type": "", "storey_name": "Stair"},
+    ]
+    secondary = [
+        # Extra element not in primary must be ignored, not appended.
+        {"element_id": "C", "ifc_guid": "g-c", "name": "Other", "ifc_type": "IfcDoor", "storey_name": "Attic"},
+        {"element_id": "A2", "ifc_guid": "g-a", "name": "ignored-name", "ifc_type": "Ignored", "storey_name": "Ebene 5"},
+        {"element_id": "B2", "ifc_guid": "g-b", "name": "Beam B", "ifc_type": "IfcBeam", "storey_name": "Ignored"},
+    ]
+    merged = merge_element_records(primary, secondary)
+    assert [item["ifc_guid"] for item in merged] == ["g-a", "g-b"]
+    assert merged[0]["storey_name"] == "Ebene 5" and merged[0]["name"] == "Wall A"
+    assert merged[0]["ifc_type"] == "IfcWall", "primary non-empty values must win"
+    assert merged[1]["name"] == "Beam B" and merged[1]["storey_name"] == "Stair"
 
 
 def test_element_resolution_failure_does_not_fail_the_answer(monkeypatch):

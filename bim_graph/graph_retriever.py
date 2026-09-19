@@ -22,7 +22,9 @@ from bim_graph.cypher_generator import CypherGenerator
 from bim_graph.cypher_templates import try_template_match
 from bim_graph.neo4j_client import Neo4jClient
 from bim_graph.query_planner import GraphQueryPlan, missing_result_columns, plan_graph_question
-from bim_graph.visualization import harvest_elements, looks_like_element_node
+from bim_graph.visualization import (
+    harvest_elements, looks_like_element_node, merge_element_records,
+)
 
 logger = logging.getLogger("bim_intellect.graph_retriever")
 
@@ -157,27 +159,42 @@ class GraphRetriever:
     ) -> List[Dict[str, Any]]:
         """Identify the elements the answer is about, for the 3D viewer.
 
-        Prefers identities already present in the answer's own result rows. Falls
-        back to the plan's dedicated identity query, which exists because
-        aggregate answers (`count(r)`) name no element at all.
+        Prefers identities already present in the answer's own result rows. When
+        they are incomplete -- aggregate answers (`count(r)`) name no element at
+        all, and free-form rows often name elements without their storey -- the
+        plan's dedicated identity query fills the gaps. A partial identity with a
+        blank storey_name would resolve every element to the `unassigned` scene
+        even though a real storey scene exists in the manifest, so completion is
+        what keeps the viewer on real geometry.
 
         Never raises: the answer is the product, the highlight is a presentation
         of it, so a failure here must not fail the question.
         """
         try:
             elements = harvest_elements(records)
-            if elements or not (plan and plan.visualization_cypher):
+            if not (plan and plan.visualization_cypher):
                 return elements
-            is_valid, warnings = client.validate(plan.visualization_cypher, parameters)
-            if not is_valid:
-                logger.warning(
-                    "Visualization query for intent=%s failed validation: %s", plan.intent, warnings,
-                )
-                return []
-            return harvest_elements(client.run(plan.visualization_cypher, parameters))
+            incomplete = elements and any(
+                not element.get("storey_name") for element in elements
+            )
+            if not elements or incomplete:
+                is_valid, warnings = client.validate(plan.visualization_cypher, parameters)
+                if not is_valid:
+                    logger.warning(
+                        "Visualization query for intent=%s failed validation: %s",
+                        plan.intent, warnings,
+                    )
+                    return elements
+                resolved = harvest_elements(client.run(plan.visualization_cypher, parameters))
+                if not elements:
+                    return resolved
+                # Order and identity come from the answer's own rows; the plan's
+                # query only fills what they lack (typically storey_name).
+                return merge_element_records(elements, resolved)
+            return elements
         except Exception as exc:
             logger.warning("Element resolution for visualization failed: %s", exc)
-            return []
+            return elements
 
     def _empty_result_message(self, cypher: str, client: Neo4jClient) -> str:
         """Distinguish 'genuinely no data' from 'filter is probably wrong'

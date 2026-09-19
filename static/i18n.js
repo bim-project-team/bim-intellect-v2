@@ -104,7 +104,9 @@
       "viewer.elements": "{n} element(s) highlighted",
       "viewer.scenes": "Storeys shown: {names}",
       "viewer.boxFallback":
-        "Showing bounding boxes: this project has no exported 3D geometry. Re-run the pipeline to generate it.",
+        "Showing bounding boxes: no exported 3D geometry exists for this project. Re-run the pipeline to generate it.",
+      "viewer.mappingFailed":
+        "Exported 3D geometry exists, but no matching scene could be resolved for the selected elements.",
       "viewer.relatedNotice":
         "Not evidence for this answer — showing all {types} in the model for orientation only.",
       "viewer.unavailable": "No 3D geometry is available for this project.",
@@ -423,7 +425,9 @@
       "viewer.elements": "{n} عضو مشخص شد",
       "viewer.scenes": "طبقات نمایش‌داده‌شده: {names}",
       "viewer.boxFallback":
-        "نمایش جعبه‌های مرزی: برای این پروژه هندسه سه‌بعدی تولید نشده است. برای ساخت آن خط پردازش را دوباره اجرا کنید.",
+        "نمایش جعبه‌های مرزی: برای این پروژه هیچ هندسه سه‌بعدی تولید نشده است. برای ساخت آن خط پردازش را دوباره اجرا کنید.",
+      "viewer.mappingFailed":
+        "هندسه سه‌بعدی تولیدشده وجود دارد، اما صحنه منطبقی برای اعضای انتخاب‌شده یافت نشد.",
       "viewer.relatedNotice":
         "شواهد این پاسخ نیست — تنها برای موقعیت‌یابی، همه {types} مدل نمایش داده می‌شود.",
       "viewer.unavailable": "هندسه سه‌بعدی برای این پروژه در دسترس نیست.",

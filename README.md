@@ -378,7 +378,7 @@ Additional checks used for the integrated tree:
 node --check static/app.js
 node --check static/i18n.js
 node --check static/sustainability.js
-node --check static/viewer.js
+node --input-type=module --check < static/viewer.js   # ESM; plain `node --check` fails
 python -m compileall -q api bim_graph rag sustainability main.py extract_graph.py extract_sotreys_type.py
 docker compose -f docker-compose.client.yml config
 python -c "import json, pathlib; json.loads(pathlib.Path('dataset/sustainability/carbon_factors.schema.json').read_text(encoding='utf-8'))"
