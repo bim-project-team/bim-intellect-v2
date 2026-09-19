@@ -1,0 +1,19 @@
+# Fix git-lfs PDFs (pointers only) and index Mabhas 15
+
+# 1. Install git-lfs if missing
+sudo apt install git-lfs
+
+# 2. Enable lfs in this repo and pull the real PDFs
+git lfs install
+git lfs pull --include "bim-intellect-sources/**"
+
+# 3. Verify the PDF is real now (~1MB, starts with %PDF)
+ls -la "bim-intellect-sources/مباحث مقررات ملی ساختمان/15 - v3-1392 - آسانسورها و پلکان برقی.pdf"
+head -c 8 "bim-intellect-sources/مباحث مقررات ملی ساختمان/15 - v3-1392 - آسانسورها و پلکان برقی.pdf"
+
+# 4. Re-upload in the Documents tab:
+#    Document ID: mabhas-15 | Domain: Regulation | leave Standard name/LEED/Version EMPTY
+#
+# 5. Re-ask in Chat:
+#    "What is the minimum landing depth for stairs according to Mabhas 15?"
+#    -> expect a cited answer: [Clause ..., Page ...]
