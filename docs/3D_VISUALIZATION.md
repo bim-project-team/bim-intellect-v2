@@ -2,17 +2,20 @@
 
 ## Purpose
 
-Every answer that identifies BIM elements is accompanied by a 3D map of the
-relevant part of the building, with those elements highlighted. The map is a
-presentation of the graph evidence behind the answer, never an independent claim.
+Every answer that identifies BIM elements is accompanied by the 3D
+Visualization view (labelled **3D Visualization** in the interface, opened
+from the chat header action or the per-answer buttons) showing the relevant
+part of the building, with those elements highlighted. The view is a
+presentation of the graph evidence behind the answer, never an independent
+claim.
 
 Three properties follow from that:
 
 - geometry is generated at ingestion from the same tessellation the clash engine
-  uses, so the map cannot disagree with the measurements the platform reports;
+  uses, so the view cannot disagree with the measurements the platform reports;
 - which elements are highlighted is decided by deterministic Cypher, never by a
   language model;
-- when there is no element evidence the map says so instead of guessing.
+- when there is no element evidence the view says so instead of guessing.
 
 ## Pipeline
 
@@ -166,7 +169,7 @@ conversational ones, so the frontend never branches on the key's existence:
 
 | `reason` | `available` | Meaning |
 |---|---|---|
-| `graph_elements` | `true` | Specific elements identified; the map auto-opens |
+| `graph_elements` | `true` | Specific elements identified; the 3D Visualization auto-opens |
 | `related_types` | `false` | No element evidence, but the subject maps to IFC types the user may opt into — orientation only |
 | `no_evidence` | `false` | Nothing to show, nothing to offer |
 | `graph_unavailable` | `false` | The graph was consulted and failed — deliberately distinct from finding nothing |

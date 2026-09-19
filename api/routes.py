@@ -682,11 +682,13 @@ def _run_issue_query(issue_type, storey, types, project_id=None, file_ids=None):
         {where_string}
         RETURN a.id AS a_id, coalesce(a.ifcGuid, a.id) AS a_guid,
                a.ifcType AS a_type, a.name AS a_name,
+               a.storeyName AS a_storey_name,
                coalesce(a.sourceIfcFile, r.sourceIfcFileA) AS a_source_ifc_file,
                coalesce(a.sourceFileId, r.sourceFileIdA) AS a_source_file_id,
                coalesce(a.discipline, r.disciplineA) AS a_discipline,
                b.id AS b_id, coalesce(b.ifcGuid, b.id) AS b_guid,
                b.ifcType AS b_type, b.name AS b_name,
+               b.storeyName AS b_storey_name,
                coalesce(b.sourceIfcFile, r.sourceIfcFileB) AS b_source_ifc_file,
                coalesce(b.sourceFileId, r.sourceFileIdB) AS b_source_file_id,
                coalesce(b.discipline, r.disciplineB) AS b_discipline,
@@ -715,6 +717,7 @@ def _run_issue_query(issue_type, storey, types, project_id=None, file_ids=None):
                 "element_a_guid": row.get("a_guid"),
                 "element_a_name": row.get("a_name"),
                 "element_a_type": row.get("a_type"),
+                "element_a_storey": row.get("a_storey_name"),
                 "element_a_source_file": row.get("a_source_ifc_file"),
                 "element_a_source_file_id": row.get("a_source_file_id"),
                 "element_a_discipline": row.get("a_discipline"),
@@ -722,6 +725,7 @@ def _run_issue_query(issue_type, storey, types, project_id=None, file_ids=None):
                 "element_b_guid": row.get("b_guid"),
                 "element_b_name": row.get("b_name"),
                 "element_b_type": row.get("b_type"),
+                "element_b_storey": row.get("b_storey_name"),
                 "element_b_source_file": row.get("b_source_ifc_file"),
                 "element_b_source_file_id": row.get("b_source_file_id"),
                 "element_b_discipline": row.get("b_discipline"),
@@ -741,8 +745,10 @@ def get_clashes_filtered(
     try:
         return _run_issue_query("CLASH", storey, types, project_id, file_id)
     except Exception as e:
+        # 503, not []: an infrastructure failure must not read as "no clashes
+        # found", the same contract /model/elements already uses.
         print(f"[routes] /clashes failed: {e}", file=sys.stderr)
-        return []
+        raise HTTPException(503, "Building graph is unavailable.")
 
 
 @router.get("/violations")
@@ -756,7 +762,7 @@ def get_violations_filtered(
         return _run_issue_query("CLEARANCE_VIOLATION", storey, types, project_id, file_id)
     except Exception as e:
         print(f"[routes] /violations failed: {e}", file=sys.stderr)
-        return []
+        raise HTTPException(503, "Building graph is unavailable.")
 
 
 @router.get("/issues")
@@ -770,7 +776,7 @@ def get_issues_filtered(
         return _run_issue_query(None, storey, types, project_id, file_id)
     except Exception as e:
         print(f"[routes] /issues failed: {e}", file=sys.stderr)
-        return []
+        raise HTTPException(503, "Building graph is unavailable.")
 
 
 # ------------------------------------------------------------------
@@ -862,6 +868,78 @@ def get_model_scene(project_id: str, file_id: str, scene_key: str):
         # the viewer only requests scenes listed there.
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+ELEMENTS_BY_GUID_QUERY = """
+MATCH (e:Element)
+WHERE ($project_id IS NULL OR e.projectId = $project_id)
+  AND (size($file_ids) = 0 OR e.sourceFileId IN $file_ids)
+  AND coalesce(e.ifcGuid, e.id) IN $guids
+RETURN e.id AS element_id, coalesce(e.ifcGuid, e.id) AS ifc_guid,
+       e.name AS name, e.ifcType AS ifc_type, e.storeyName AS storey_name,
+       e.minX AS min_x, e.minY AS min_y, e.minZ AS min_z,
+       e.maxX AS max_x, e.maxY AS max_y, e.maxZ AS max_z
+ORDER BY e.ifcType, e.name
+LIMIT 100
+"""
+
+
+def _element_bounds_payload(records) -> dict:
+    """Shared shape for the element-bounds endpoints: viewer-frame boxes plus
+    the server-derived scene key, so clients never reimplement key derivation."""
+    elements = []
+    for record in records:
+        minimum, maximum = ifc_bbox_to_gltf(
+            record["min_x"], record["min_y"], record["min_z"],
+            record["max_x"], record["max_y"], record["max_z"],
+        )
+        elements.append({
+            "element_id": record["element_id"],
+            "ifc_guid": record["ifc_guid"],
+            "name": record["name"],
+            "ifc_type": record["ifc_type"],
+            "storey_name": record["storey_name"],
+            "scene_key": scene_key_for(record["storey_name"]),
+            "min": minimum,
+            "max": maximum,
+        })
+    return {"count": len(elements), "elements": elements}
+
+
+@router.get("/model/elements/by-guid")
+def get_model_elements_by_guid(
+    project_id: str = Query(..., description="Project to read elements from"),
+    guid: List[str] = Query(..., description="Repeatable: IFC GlobalId (or element id) to fetch"),
+    file_id: Optional[List[str]] = Query(None, description="Repeatable: restrict to selected IFC files"),
+):
+    """Exact element bounds for a known pair (the clash record names both
+    elements, so no harvesting step is needed). Additive to /model/elements,
+    which remains the population-level endpoint."""
+    normalized_project = safe_id(project_id)
+    normalized_file_ids = [
+        normalized for value in (file_id or [])
+        if (normalized := safe_id(value, fallback=""))
+    ]
+    # GUIDs are property values, not path segments — matched verbatim against
+    # the stored IFC GlobalId, which may contain characters safe_id would strip.
+    wanted = [value for value in (guid or []) if value]
+    if not wanted:
+        raise HTTPException(400, "At least one guid is required.")
+    parameters = {
+        "project_id": normalized_project,
+        "file_ids": normalized_file_ids,
+        "guids": wanted[:100],
+    }
+    try:
+        with Neo4jClient() as client:
+            records = client.run(ELEMENTS_BY_GUID_QUERY, parameters)
+    except Exception as exc:
+        print(f"[routes] /model/elements/by-guid failed: {exc}", file=sys.stderr)
+        raise HTTPException(503, "Building graph is unavailable.")
+    payload = _element_bounds_payload(records)
+    payload["project_id"] = normalized_project
+    payload["truncated"] = False
+    return payload
 
 
 @router.get("/model/elements")

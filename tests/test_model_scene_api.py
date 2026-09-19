@@ -239,3 +239,131 @@ def test_viewer_module_is_served_and_resolvable_from_the_import_map():
     for addon in ("controls/OrbitControls.js", "loaders/GLTFLoader.js",
                   "utils/BufferGeometryUtils.js"):
         assert client.get(import_map["imports"]["three/addons/"] + addon).status_code == 200
+
+
+# ----------------------------------------------------------------------
+# /model/elements/by-guid — exact bounds for a known clash pair
+# ----------------------------------------------------------------------
+
+def _query_by_guid(scenes_root, monkeypatch, **params):
+    monkeypatch.setattr(routes, "Neo4jClient", _RecordingClient)
+    response = client.get(
+        "/api/model/elements/by-guid",
+        params={"project_id": "demo", "guid": ["guid-a"], **params},
+    )
+    return response, _RecordingClient.last_parameters
+
+
+def test_by_guid_returns_viewer_frame_bounds_and_scene_key(scenes_root, monkeypatch):
+    """Same element payload shape as /model/elements, so the viewer reuses it."""
+    response, _ = _query_by_guid(scenes_root, monkeypatch)
+    assert response.status_code == 200
+    element = response.json()["elements"][0]
+    assert element["ifc_guid"] == "guid-a"
+    assert element["scene_key"] == scene_key("Level 5")
+    assert element["min"] == pytest.approx([-1.0, 3.0, -5.0])
+
+
+def test_by_guid_passes_guids_verbatim(scenes_root, monkeypatch):
+    """IFC GlobalIds carry '$' and ':' characters; they are matched as property
+    values, never sanitized like path segments."""
+    guids = ["3DIIZQPe$4ndB2", "1Csh5jmV932w"]
+    response, parameters = _query_by_guid(scenes_root, monkeypatch, guid=guids)
+    assert response.status_code == 200
+    assert parameters["guids"] == guids
+
+
+def test_by_guid_applies_file_scope(scenes_root, monkeypatch):
+    _, parameters = _query_by_guid(
+        scenes_root, monkeypatch, file_id=["model-a", "model-b"],
+    )
+    assert parameters["file_ids"] == ["model-a", "model-b"]
+
+
+def test_by_guid_requires_at_least_one_guid(scenes_root, monkeypatch):
+    monkeypatch.setattr(routes, "Neo4jClient", _RecordingClient)
+    # Omitting the parameter fails FastAPI validation; empty strings reach the
+    # handler and get its explicit 400.
+    assert client.get(
+        "/api/model/elements/by-guid", params={"project_id": "demo"},
+    ).status_code == 422
+    assert client.get(
+        "/api/model/elements/by-guid",
+        params={"project_id": "demo", "guid": [""]},
+    ).status_code == 400
+
+
+def test_by_guid_reports_graph_unavailability_honestly(scenes_root):
+    def refuse():
+        raise RuntimeError("Couldn't connect to localhost:7687")
+
+    original = routes.Neo4jClient
+    routes.Neo4jClient = lambda: refuse()
+    try:
+        response = client.get(
+            "/api/model/elements/by-guid",
+            params={"project_id": "demo", "guid": ["guid-a"]},
+        )
+    finally:
+        routes.Neo4jClient = original
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Building graph is unavailable."
+
+
+# ----------------------------------------------------------------------
+# Clash results endpoints: 503 on graph failure, storey fields present
+# ----------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", ["/api/clashes", "/api/violations", "/api/issues"])
+def test_issue_endpoints_report_graph_unavailability_honestly(path):
+    """An infrastructure failure must not read as "no clashes found" ([])."""
+    def refuse():
+        raise RuntimeError("Couldn't connect to localhost:7687")
+
+    original = routes.Neo4jClient
+    routes.Neo4jClient = lambda: refuse()
+    try:
+        response = client.get(path, params={"project_id": "demo"})
+    finally:
+        routes.Neo4jClient = original
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Building graph is unavailable."
+
+
+def test_issue_query_projects_storey_names_and_aliases(monkeypatch):
+    """The clash card shows each element's storey; the query must project it and
+    expose it under the additive element_*_storey alias."""
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def run(self, query, params=None):
+            assert "a.storeyName AS a_storey_name" in query
+            assert "b.storeyName AS b_storey_name" in query
+            return [{
+                "a_id": "p::a::guid-a", "a_guid": "guid-a", "a_name": "Beam",
+                "a_type": "IfcBeam", "a_storey_name": "Level 5",
+                "a_source_ifc_file": "structure.ifc", "a_source_file_id": "a",
+                "a_discipline": "structure",
+                "b_id": "p::a::guid-b", "b_guid": "guid-b", "b_name": "Wall",
+                "b_type": "IfcWall", "b_storey_name": "Level 5",
+                "b_source_ifc_file": "structure.ifc", "b_source_file_id": "a",
+                "b_discipline": "structure",
+                "issue": "CLASH", "metric": 1.5, "project_id": "p",
+                "cross_file": False,
+                "anomaly_score_a": None, "anomaly_score_b": None,
+                "combined_anomaly_score": None,
+            }]
+
+    monkeypatch.setattr(routes, "Neo4jClient", Client)
+    rows = routes._run_issue_query("CLASH", None, None, "p", ["a"])
+    row = rows[0]
+    assert row["a_storey_name"] == "Level 5" and row["b_storey_name"] == "Level 5"
+    assert row["element_a_storey"] == "Level 5"
+    assert row["element_b_storey"] == "Level 5"
+    # The legacy a_*/b_* contract is unchanged.
+    assert row["a_type"] == "IfcBeam" and row["element_a_type"] == "IfcBeam"

@@ -347,8 +347,8 @@ def test_frontend_results_scope_and_stale_response_guard_are_present():
     assert "if (allCheckbox.checked) this.selectAll()" in javascript
     assert "else this.clear()" in javascript
     assert "currentTypesFilter = resultTypeDropdown.getFilterValue() || []" in javascript
-    assert '/static/i18n.js?v=7' in template
-    assert '/static/app.js?v=15' in template
+    assert '/static/i18n.js?v=9' in template
+    assert '/static/app.js?v=17' in template
 
 
 def test_project_ingest_reset_all_reconciles_registry_and_scene_scope(monkeypatch):

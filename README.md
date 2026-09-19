@@ -19,7 +19,7 @@ BIM-Intellect combines IFC geometry, a Neo4j building graph, a multilingual regu
 - Downloadable `sustainability-report-v1` JSON, audit CSV, and printable HTML reports
 - Multi-query retrieval, hybrid/cross-encoder reranking, section expansion, and lexical fallback
 - Schema-aware graph query planning with parameterized Cypher and result-completeness checks
-- Storey-partitioned glTF export and a 3D map that highlights the elements an answer identified
+- Storey-partitioned glTF export and a 3D Visualization that highlights the elements an answer identified
 - Clause/page citation validation that fails closed on unsupported regulatory claims
 - Bounded conversation memory and standard/strong model profiles
 - Responsive bilingual UI with mirrored RTL layout and content-aware text direction
@@ -83,11 +83,11 @@ flowchart LR
 
 The web workspace has five views:
 
-- **Chat** routes questions to regulations, the building graph, both sources, or conversation handling. It displays citations, graph elements, model mode, and retrieval diagnostics. When an answer identifies specific BIM elements, a 3D map opens beside it with those elements highlighted in their storey.
+- **Chat** routes questions to regulations, the building graph, both sources, or conversation handling. It displays citations, graph elements, model mode, and retrieval diagnostics. When an answer identifies specific BIM elements, the 3D Visualization opens beside it with those elements highlighted in their storey.
 - **Pipeline** uploads and registers multiple IFC files, selects a project/model set and optional storey/type filters, imports the graph, and runs clash analysis.
 - **Results** separates all issues, volumetric clashes, and clearance violations, with graph-derived storey/type filters.
 - **Sustainability** analyzes selected or all ingested project models, shows deterministic carbon coverage/breakdowns/contributors/data quality, displays exact-scope grounded LEED findings, and downloads JSON/CSV/HTML reports.
-- **Documents** uploads classified regulation, sustainability, LEED, or standard PDFs, lists what is actually indexed, and manages the configured collection.
+- **Documents** uploads classified regulation, sustainability, LEED, or standard PDFs, lists what is actually indexed, and removes documents individually or in bulk via Select All + Delete Selected.
 
 English and Persian translations live in `static/i18n.js`. The layout uses CSS logical properties for RTL mirroring, while answers, questions, IFC names, IDs, metrics, and citations preserve the direction appropriate to their content.
 

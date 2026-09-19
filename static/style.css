@@ -418,6 +418,28 @@ html[dir="rtl"] .sidebar.open {
   display: none;
 }
 
+/* The 3D Visualization trigger keeps the rail-toggle mechanics but carries a
+   visible label beside its cube icon, so the feature is discoverable in the
+   header instead of reading as an unnamed corner control. */
+.viewer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-inline: 0.55rem;
+}
+
+.viewer-toggle-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.viewer-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -1981,7 +2003,11 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 
 .results-table-scroll {
   overscroll-behavior-inline: contain;
+  overscroll-behavior-block: contain;
   scrollbar-gutter: stable;
+  /* Bound the table so its sticky header row stays visible while the rows
+     scroll — the count line and the top scrollbar above stay fixed. */
+  max-height: min(70vh, 820px);
 }
 
 .results-table-scroll:focus-visible {
@@ -1991,6 +2017,382 @@ html[dir="rtl"] .model-toggle input:checked + .model-toggle-track::after {
 
 html[dir="ltr"] .results-table-scroll { direction: ltr; }
 html[dir="rtl"] .results-table-scroll { direction: rtl; }
+
+/* Row count for the active tab/filter, between the filters and the results. */
+.results-count {
+  margin: 0;
+  padding: 0.55rem 1.1rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+/* Full-area states: loading skeleton, empty, and API failure. The error state
+   is deliberately a different treatment than the empty one — an infrastructure
+   failure must never read as "no clashes found". */
+.results-status {
+  margin: 0 1.1rem 0.75rem;
+}
+
+.results-status.is-empty {
+  padding: 1.6rem 1rem;
+  border: 1px dashed var(--border-light);
+  text-align: center;
+  color: var(--fg-light);
+  font-style: italic;
+}
+
+.results-status.is-error {
+  padding: 1rem;
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.results-status.is-loading {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.results-skeleton {
+  height: 84px;
+  border: 1px solid var(--border-faint);
+  background: linear-gradient(90deg, var(--surface) 0%, var(--surface-alt) 50%, var(--surface) 100%);
+  background-size: 200% 100%;
+  animation: results-skeleton 1.4s ease-in-out infinite;
+}
+
+@keyframes results-skeleton {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ==========================================================================
+   Clash review cards — the primary results view
+   --------------------------------------------------------------------------
+   One clash = one record: issue/relation/metric on top, Element A ↔ Element B
+   side by side, technical IDs behind an expandable details panel. Monochrome
+   system: the danger token marks hard clashes; clearances are dashed so the
+   distinction survives without color.
+   ========================================================================== */
+
+.results-cards {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0 1.1rem 1.1rem;
+}
+
+.clash-card {
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  padding: 0.75rem 0.9rem;
+}
+
+.clash-card:hover {
+  border-color: var(--border);
+}
+
+.clash-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-block-end: 0.55rem;
+  border-block-end: 1px solid var(--border-faint);
+}
+
+.clash-card-header .card-metric {
+  margin-inline-start: auto;
+}
+
+.relation-chip {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.relation-chip.relation-cross {
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 0.1rem 0.4rem;
+  font-weight: 700;
+}
+
+.card-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.card-metric-label {
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-light);
+}
+
+.card-metric strong {
+  font-size: 0.95rem;
+}
+
+.card-metric-unit {
+  font-size: 0.66rem;
+  color: var(--fg-light);
+}
+
+/* Element A ↔ Element B: the relationship is the layout. */
+.clash-card-elements {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding-block: 0.65rem;
+}
+
+.clash-vs {
+  align-self: center;
+  font-family: var(--font-mono);
+  color: var(--fg-light);
+  padding-inline: 0.15rem;
+}
+
+.clash-el {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.clash-el-side {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-light);
+}
+
+.card-el-type {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.card-el-name {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.card-el-file,
+.card-el-storey,
+.card-el-discipline {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Progressive disclosure: IDs live here, wrapped and LTR-pinned. */
+.clash-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.9rem;
+  padding: 0.65rem 0;
+  border-block: 1px solid var(--border-faint);
+}
+
+.clash-details[hidden] {
+  display: none;
+}
+
+.clash-details-group h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.clash-detail-row {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  padding-block: 0.12rem;
+  min-width: 0;
+}
+
+.clash-detail-label {
+  flex: 0 0 6.5rem;
+  color: var(--fg-light);
+}
+
+.clash-detail-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.clash-detail-value.mono {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.clash-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding-block-start: 0.55rem;
+}
+
+.clash-action {
+  padding: 0.25rem 0.55rem;
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.clash-action:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.clash-action:focus-visible {
+  outline: 2px solid var(--accent, var(--fg));
+  outline-offset: 1px;
+}
+
+.results-load-more {
+  display: flex;
+  justify-content: center;
+  padding-block-end: 1.1rem;
+}
+
+.results-load-more.hidden {
+  display: none;
+}
+
+/* Narrow screens: the two elements stack with the ↕ arrow between them. */
+@media (max-width: 700px) {
+  .clash-card-elements {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clash-vs {
+    justify-self: start;
+    padding-block: 0.1rem;
+  }
+
+  .clash-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .results-skeleton {
+    animation: none;
+  }
+}
+
+/* Issue badges — the first thing the eye scans for. Monochrome system, so
+   hard clashes take the single danger token and clearances stay outlined
+   (dashed = violation of a limit rather than an overlap). */
+.issue-badge {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--border-light);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.issue-badge.issue-clash {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.issue-badge.issue-clearance {
+  border-color: var(--fg-muted);
+  border-style: dashed;
+  color: var(--fg);
+}
+
+.issue-badge.issue-other {
+  color: var(--fg-muted);
+}
+
+/* Scanning aids for wide tables: hover tracking plus a first column that
+   stays put, so "which element am I reading about" survives horizontal
+   scrolling. Backgrounds stay opaque — translucency would let scrolled
+   columns bleed through the pinned cells. */
+.results-table tbody tr:hover td {
+  background: var(--surface-alt);
+}
+
+.results-table thead th:first-child,
+.results-table tbody td:first-child {
+  position: sticky;
+  inset-inline-start: 0;
+}
+
+.results-table thead th:first-child {
+  z-index: 2;
+}
+
+.results-table tbody td:first-child {
+  z-index: 1;
+  background: var(--bg);
+}
+
+.results-table tbody tr:nth-child(even) td:first-child {
+  background: var(--surface);
+}
+
+.results-table tbody tr:hover td:first-child {
+  background: var(--surface-alt);
+}
+
+/* Mirrored horizontal scrollbar rendered ABOVE the results table (kept in
+   sync with the table's own scrolling by app.js). Hidden entirely while the
+   table fits its container, so narrow tables never gain a stray gutter.
+   Direction matches the table container so scrollLeft mirrors cleanly in
+   both LTR and RTL. */
+.results-top-scroll {
+  display: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+  height: 12px;
+  margin-block-end: 0.15rem;
+  overscroll-behavior-inline: contain;
+  /* Same reserved gutter as .results-table-scroll, so both containers share
+     one clientWidth and their scrollLeft ranges match exactly in both
+     directions (a real vertical scrollbar on the table must not skew sync). */
+  scrollbar-gutter: stable;
+}
+
+.results-top-scroll.has-overflow {
+  display: block;
+}
+
+.results-top-scroll-spacer {
+  height: 1px;
+}
+
+html[dir="ltr"] .results-top-scroll { direction: ltr; }
+html[dir="rtl"] .results-top-scroll { direction: rtl; }
 
 .results-table {
   min-width: 1760px;
@@ -2555,6 +2957,16 @@ html[dir="rtl"] .results-table-scroll { direction: rtl; }
 
 @media (max-width: 560px) {
   .status-pill {
+    display: none;
+  }
+
+  /* Header space is scarce on phones: the 3D Visualization trigger keeps its
+     labelled icon (aria-label survives) and drops the visible text. */
+  .viewer-toggle {
+    padding-inline: 0.35rem;
+  }
+
+  .viewer-toggle-label {
     display: none;
   }
 }

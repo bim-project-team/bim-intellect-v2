@@ -303,8 +303,23 @@ if (!conversationId) {
 
 const log = document.getElementById("log");
 const resultsBody = document.getElementById("results-body");
+const resultsCount = document.getElementById("results-count");
+const resultsTableScroll = document.querySelector(".results-table-scroll");
+const resultsTopScroll = document.getElementById("results-top-scroll");
+const resultsTopSpacer = document.getElementById("results-top-scroll-spacer");
 const resultTabButtons = document.querySelectorAll("#tab-results .tab-btn");
-const refreshResultsBtn = document.getElementById("refresh-results-btn");
+const exportResultsBtn = document.getElementById("export-results-btn");
+const resultsCardView = document.getElementById("results-card-view");
+const resultsCards = document.getElementById("results-cards");
+const resultsTableWrap = document.getElementById("results-table-wrap");
+const resultsStatus = document.getElementById("results-status");
+const loadMoreResultsBtn = document.getElementById("load-more-results-btn");
+const viewCardsBtn = document.getElementById("view-cards-btn");
+const viewTableBtn = document.getElementById("view-table-btn");
+const sourceModelFilter = document.getElementById("source-model-filter");
+const resultsSearchInput = document.getElementById("results-search");
+const resultsSortSelect = document.getElementById("results-sort");
+const crossFileFilterCheckbox = document.getElementById("cross-file-filter");
 const clearLogBtn = document.getElementById("clear-log-btn");
 const ingestForm = document.getElementById("ingest-form");
 const ingestSubmitBtn = document.getElementById("ingest-submit");
@@ -331,8 +346,6 @@ const uploadSubmit = document.getElementById("upload-submit");
 const uploadStatus = document.getElementById("upload-status");
 const uploadStatusText = document.getElementById("upload-status-text");
 
-const refreshCorpusBtn = document.getElementById("refresh-corpus-btn");
-const clearCorpusBtn = document.getElementById("clear-corpus-btn");
 const corpusSelectAll = document.getElementById("corpus-select-all");
 const deleteCorpusSelectedBtn = document.getElementById("delete-corpus-selected-btn");
 const corpusInfo = document.getElementById("corpus-info");
@@ -362,13 +375,15 @@ function syncWorkspaceHeader() {
   workspaceSubtitle.setAttribute("data-i18n", meta.subtitle);
   workspaceSubtitle.textContent = t(meta.subtitle);
 
-  // The context rail, the 3D map, and the model toggle belong to chat only.
+  // The context rail, the 3D Visualization trigger, and the model toggle
+  // belong to chat only. The viewer *panel* is also reachable from Results,
+  // where each clash card offers "View in 3D" for its element pair.
   const onChat = activeNav === "chat";
   modelToggleWrap.classList.toggle("hidden", !onChat);
   railToggle.classList.toggle("hidden", !onChat);
   contextRail.classList.toggle("hidden", !onChat);
   viewerToggle.classList.toggle("hidden", !onChat);
-  viewerPanel.classList.toggle("hidden", !onChat);
+  viewerPanel.classList.toggle("hidden", !(onChat || activeNav === "results"));
   // Leaving chat must also close the drawers, otherwise one would reappear
   // still-open when the user comes back.
   if (!onChat) {
@@ -476,7 +491,7 @@ navButtons.forEach((btn) => {
 });
 
 // ------------------------------------------------------------------
-// 3D map
+// 3D Visualization
 // ------------------------------------------------------------------
 // One viewer instance, re-targeted per answer. viewer.js is a module and
 // therefore deferred, so it may publish window.bimViewer after this classic
@@ -513,9 +528,20 @@ async function fetchElementBounds(projectId, sceneKeys, ifcTypes, fileIds) {
   return response.json();
 }
 
+/** Bounds for specific elements, so a clash pair can be shown without
+ *  fetching (and filtering) a whole storey or type population. */
+async function fetchElementsByIds(projectId, guids, fileIds) {
+  const url = new URL("/api/model/elements/by-guid", window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  (guids || []).filter(Boolean).forEach((guid) => url.searchParams.append("guid", guid));
+  (fileIds || []).filter(Boolean).forEach((fileId) => url.searchParams.append("file_id", fileId));
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+
 /** Scene descriptors from the ingest-time manifest, restricted to the given keys. */
-async function fetchScenes(projectId, sceneKeys, fileIds) {
-  const wanted = new Set((sceneKeys || []).filter(Boolean));
+async function fetchScenes(projectId, sceneKeys, fileIds) {  const wanted = new Set((sceneKeys || []).filter(Boolean));
   const wantedFiles = new Set((fileIds || []).filter(Boolean));
   if (!wanted.size) return [];
   const url = new URL("/api/model/manifest", window.location.origin);
@@ -1212,8 +1238,8 @@ async function loadCorpusStatus() {
   }
 }
 
-refreshCorpusBtn.addEventListener("click", loadCorpusStatus);
-
+// No manual Refresh button: loadCorpusStatus() runs when the tab opens,
+// after every upload and deletion, on page load, and on language change.
 corpusSelectAll.addEventListener("change", () => {
   selectedDocumentIds = corpusSelectAll.checked
     ? new Set(indexedDocuments.map((doc) => String(doc.document_id)))
@@ -1245,26 +1271,9 @@ deleteCorpusSelectedBtn.addEventListener("click", async () => {
   }
 });
 
-clearCorpusBtn.addEventListener("click", async () => {
-  if (!confirm(t("corpus.confirmClear"))) {
-    return;
-  }
-  clearCorpusBtn.disabled = true;
-  try {
-    const response = await fetch("/api/rag/clear", { method: "DELETE" });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      alert(`${t("corpus.clearFailed")}: ${data.detail || response.statusText}`);
-      return;
-    }
-    selectedDocumentIds.clear();
-    await loadCorpusStatus();
-  } catch (err) {
-    alert(`${t("common.error")}: ${err.message}`);
-  } finally {
-    clearCorpusBtn.disabled = false;
-  }
-});
+// The backend clear-collection endpoint is kept for compatibility, but the UI
+// no longer exposes a Clear All button: Select All + Delete Selected covers
+// bulk deletion, so no frontend caller remains.
 
 // ------------------------------------------------------------------
 // Console / activity log (unchanged from original)
@@ -1486,12 +1495,23 @@ ingestForm.addEventListener("submit", async (e) => {
 });
 
 // ------------------------------------------------------------------
-// Results table
+// Results: clash review cards (primary) + wide table (optional)
 // ------------------------------------------------------------------
 
 let currentStoreyFilter = "";
 let currentTypesFilter = [];
 let resultsLoadToken = 0;
+// The rows currently loaded from the API, in normalized shape; the CSV export,
+// the languagechange re-render, and both views work from this list instead of
+// re-fetching or scraping the DOM.
+let lastResultsRows = [];
+// Rows after the instant client filters (search / source model / cross-file /
+// sort). Recomputed on every render cycle.
+let visibleRowsCache = [];
+// Card-view pagination: render a bounded page and reveal more on demand, so a
+// 1000-row project never inserts thousands of DOM nodes at once.
+const RESULTS_PAGE_SIZE = 50;
+let resultsRenderCount = RESULTS_PAGE_SIZE;
 
 function appendCurrentResultScope(url) {
   const projectId = projectIdInput ? projectIdInput.value.trim() : "";
@@ -1512,7 +1532,13 @@ function invalidateResults() {
   // Supersede any in-flight request so a slow response for the old project or
   // file selection cannot repaint stale rows after the scope changed.
   resultsLoadToken += 1;
-  resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
+  lastResultsRows = [];
+  visibleRowsCache = [];
+  resultsRenderCount = RESULTS_PAGE_SIZE;
+  showResultsState("loading");
+  if (exportResultsBtn) exportResultsBtn.disabled = true;
+  renderTableRows();
+  updateResultsTopScroll();
 }
 
 // Maps the results sub-tab id to its label key, so log lines name the tab in
@@ -1532,11 +1558,14 @@ resultTabButtons.forEach((btn) => {
   });
 });
 
-refreshResultsBtn.addEventListener("click", loadResults);
-
 async function loadResults() {
   const loadToken = ++resultsLoadToken;
-  resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
+  lastResultsRows = [];
+  visibleRowsCache = [];
+  resultsRenderCount = RESULTS_PAGE_SIZE;
+  showResultsState("loading");
+  renderTableRows();
+  updateResultsTopScroll();
   try {
     // Call the matching backend route depending on which tab is active
     let endpoint = "api/issues";
@@ -1552,56 +1581,605 @@ async function loadResults() {
 
     const rows = await getJSON(url.pathname + url.search);
     if (loadToken !== resultsLoadToken) return;
-    renderRows(rows);
-    logInfo(t("log.loadedRows", { n: rows ? rows.length : 0, tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }));
+    lastResultsRows = normalizeResultRows(rows);
+    populateSourceModelFilter();
+    renderAllResults();
+    logInfo(t("log.loadedRows", { n: lastResultsRows.length, tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }));
   } catch (err) {
     if (loadToken !== resultsLoadToken) return;
-    resultsBody.innerHTML = `<tr><td colspan="13" class="empty">${escapeHtml(t("common.error"))}: ${escapeHtml(err.message || err)}</td></tr>`;
+    showResultsState("error", err);
+    resultsBody.innerHTML = `<tr><td colspan="13" class="empty">${escapeHtml(resultsErrorText(err))}</td></tr>`;
+    updateResultsMeta();
+    updateResultsTopScroll();
     logError(t("log.loadFailed", { tab: t(RESULT_TAB_KEYS[activeTab] || "results.all") }), err.message || err);
   }
 }
 
-function renderRows(rows) {
-  if (!rows || rows.length === 0) {
+// Loading / empty / error share one strip so an infrastructure failure can
+// never be misread as an engineering result ("no clashes found").
+function showResultsState(state, error) {
+  if (!resultsStatus) return;
+  // Any full-area state replaces whatever cards were showing.
+  if (resultsCards) resultsCards.innerHTML = "";
+  if (loadMoreResultsBtn) loadMoreResultsBtn.classList.add("hidden");
+  resultsStatus.classList.remove("hidden", "is-empty", "is-error");
+  if (state === "loading") {
+    resultsStatus.classList.add("is-loading");
+    resultsStatus.innerHTML = `
+      <div class="results-skeleton"></div>
+      <div class="results-skeleton"></div>
+      <div class="results-skeleton"></div>`;
+    if (resultsCount) resultsCount.textContent = t("results.loading");
+    return;
+  }
+  resultsStatus.classList.remove("is-loading");
+  if (state === "error") {
+    resultsStatus.classList.add("is-error");
+    lastResultsError = resultsErrorText(error);
+    resultsStatus.textContent = lastResultsError;
+    if (resultsCount) resultsCount.textContent = "";
+    return;
+  }
+  // empty
+  resultsStatus.classList.add("is-empty");
+  resultsStatus.textContent = t("results.noResults");
+  if (resultsCount) resultsCount.textContent = "";
+}
+
+// Kept so a language change can re-translate the prefix while preserving the
+// backend's own detail text.
+let lastResultsError = null;
+
+// getJSON embeds the status code and raw body in the thrown message; surface
+// the API's own detail ("Building graph is unavailable.") rather than JSON.
+function resultsErrorText(error) {
+  const raw = String((error && error.message) || error || "");
+  const match = raw.match(/^(\d+):\s*([\s\S]*)$/);
+  if (match) {
+    try {
+      const data = JSON.parse(match[2]);
+      if (data && data.detail) return `${t("results.loadError")}: ${data.detail}`;
+    } catch (e) { /* body was not JSON — fall through */ }
+    return `${t("results.loadError")}: ${match[2]}`;
+  }
+  return `${t("results.loadError")}: ${raw}`;
+}
+
+// Maps one API row onto the field set the UI renders, resolving the legacy
+// `a_*`/`b_*` aliases once so the card view, table view, and CSV exporter all
+// agree on the same values.
+function normalizeResultRows(rows) {
+  return (rows || []).map((r) => {
+    const aId = r.element_a_id ?? r.a_id ?? "";
+    const bId = r.element_b_id ?? r.b_id ?? "";
+    const issue = r.issue ?? "";
+    return {
+      uid: `${aId}|${bId}|${issue}`,
+      aType: r.element_a_type ?? r.a_type ?? "",
+      aName: r.element_a_name ?? r.a_name ?? "",
+      aId,
+      aGuid: r.element_a_guid ?? r.a_guid ?? "",
+      aStorey: r.element_a_storey ?? r.a_storey_name ?? "",
+      aFile: r.element_a_source_file ?? r.a_source_ifc_file ?? t("results.legacySource"),
+      aFileId: r.element_a_source_file_id ?? r.a_source_file_id ?? "",
+      aDiscipline: r.element_a_discipline ?? r.a_discipline ?? t("pipeline.unspecified"),
+      bType: r.element_b_type ?? r.b_type ?? "",
+      bName: r.element_b_name ?? r.b_name ?? "",
+      bId,
+      bGuid: r.element_b_guid ?? r.b_guid ?? "",
+      bStorey: r.element_b_storey ?? r.b_storey_name ?? "",
+      bFile: r.element_b_source_file ?? r.b_source_ifc_file ?? t("results.legacySource"),
+      bFileId: r.element_b_source_file_id ?? r.b_source_file_id ?? "",
+      bDiscipline: r.element_b_discipline ?? r.b_discipline ?? t("pipeline.unspecified"),
+      crossFile: r.cross_file === true || r.relation_scope === "CROSS-FILE",
+      issue,
+      metricValue: r.metric !== undefined && r.metric !== null ? Number(r.metric) : null,
+      metric: r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : "",
+      projectId: r.project_id ?? "",
+      anomalyA: r.anomaly_score_a ?? null,
+      anomalyB: r.anomaly_score_b ?? null,
+      anomalyCombined: r.combined_anomaly_score ?? null,
+    };
+  });
+}
+
+// Hard clashes and clearance violations read at a glance as badges; anything
+// else (future issue kinds) falls back to its raw code so nothing is hidden.
+function issueBadgeHtml(issue) {
+  const value = String(issue || "");
+  if (!value) return "";
+  if (value === "CLASH") {
+    return `<span class="issue-badge issue-clash">${escapeHtml(t("results.issueClash"))}</span>`;
+  }
+  if (value === "CLEARANCE_VIOLATION") {
+    return `<span class="issue-badge issue-clearance">${escapeHtml(t("results.issueClearance"))}</span>`;
+  }
+  return `<span class="issue-badge issue-other">${escapeHtml(value)}</span>`;
+}
+
+function relationChipHtml(row) {
+  return row.crossFile
+    ? `<span class="relation-chip relation-cross">${escapeHtml(t("results.crossFileLabel"))}</span>`
+    : `<span class="relation-chip relation-intra">${escapeHtml(t("results.sameModelLabel"))}</span>`;
+}
+
+// Metric block: label reflects what the backend actually measures (AABB
+// overlap volume for clashes, separation distance for clearances). Units stay
+// "model units" — the backend does not assert a physical unit.
+function metricBlockHtml(row) {
+  if (row.metricValue === null) return "";
+  const label = row.issue === "CLASH"
+    ? t("results.overlap")
+    : row.issue === "CLEARANCE_VIOLATION" ? t("results.clearanceMetric") : t("results.colMetric");
+  const unit = row.issue === "CLASH" ? t("results.modelUnitsCubic") : t("results.modelUnits");
+  return `
+    <div class="card-metric" dir="ltr">
+      <span class="card-metric-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(row.metric)}</strong>
+      <span class="card-metric-unit">${escapeHtml(unit)}</span>
+    </div>`;
+}
+
+function clashElementColumn(type, name, file, storey, discipline) {
+  const parts = [`<span class="card-el-type" dir="auto">${escapeHtml(type)}</span>`];
+  if (name) parts.push(`<span class="card-el-name" dir="auto">${escapeHtml(name)}</span>`);
+  if (file) parts.push(`<span class="card-el-file" dir="auto">${escapeHtml(file)}</span>`);
+  if (storey) parts.push(`<span class="card-el-storey" dir="auto">${escapeHtml(storey)}</span>`);
+  if (discipline && String(discipline).toLowerCase() !== "unspecified") {
+    parts.push(`<span class="card-el-discipline" dir="auto">${escapeHtml(discipline)}</span>`);
+  }
+  return parts.join("");
+}
+
+function clashDetailsRow(label, value, mono) {
+  if (value === undefined || value === null || String(value) === "") return "";
+  return `
+    <div class="clash-detail-row">
+      <span class="clash-detail-label">${escapeHtml(label)}</span>
+      <span class="clash-detail-value${mono ? " mono" : ""}" dir="${mono ? "ltr" : "auto"}">${escapeHtml(String(value))}</span>
+    </div>`;
+}
+
+function clashDetailsHtml(row) {
+  const numeric = (value) => (value === null || value === undefined ? "" : Number(value).toFixed(6));
+  return `
+    <div class="clash-details" hidden>
+      <div class="clash-details-group">
+        <h4 data-i18n="results.colElementA">${escapeHtml(t("results.colElementA"))}</h4>
+        ${clashDetailsRow(t("results.graphId"), row.aId, true)}
+        ${clashDetailsRow(t("results.ifcGuid"), row.aGuid, true)}
+        ${clashDetailsRow(t("results.sourceFile"), row.aFile, false)}
+        ${clashDetailsRow(t("results.discipline"), row.aDiscipline, false)}
+        ${clashDetailsRow(t("results.storey"), row.aStorey, false)}
+      </div>
+      <div class="clash-details-group">
+        <h4 data-i18n="results.colElementB">${escapeHtml(t("results.colElementB"))}</h4>
+        ${clashDetailsRow(t("results.graphId"), row.bId, true)}
+        ${clashDetailsRow(t("results.ifcGuid"), row.bGuid, true)}
+        ${clashDetailsRow(t("results.sourceFile"), row.bFile, false)}
+        ${clashDetailsRow(t("results.discipline"), row.bDiscipline, false)}
+        ${clashDetailsRow(t("results.storey"), row.bStorey, false)}
+      </div>
+      <div class="clash-details-group">
+        <h4 data-i18n="results.colIssue">${escapeHtml(t("results.colIssue"))}</h4>
+        ${clashDetailsRow(t("results.colIssue"), row.issue, true)}
+        ${clashDetailsRow(t("results.colMetric"), row.metric, true)}
+        ${clashDetailsRow(t("results.projectLabel"), row.projectId, false)}
+        ${clashDetailsRow(t("results.relation"), row.crossFile ? "CROSS-FILE" : "INTRA-FILE", true)}
+        ${clashDetailsRow(`${t("results.anomalyScore")} (A)`, numeric(row.anomalyA), true)}
+        ${clashDetailsRow(`${t("results.anomalyScore")} (B)`, numeric(row.anomalyB), true)}
+        ${clashDetailsRow(`${t("results.anomalyScore")} (Σ)`, numeric(row.anomalyCombined), true)}
+      </div>
+    </div>`;
+}
+
+function clashCardHtml(row) {
+  const canView3d = Boolean(row.aGuid && row.bGuid);
+  return `
+    <article class="clash-card" data-uid="${escapeHtml(row.uid)}">
+      <header class="clash-card-header">
+        ${issueBadgeHtml(row.issue)}
+        ${relationChipHtml(row)}
+        ${metricBlockHtml(row)}
+      </header>
+      <div class="clash-card-elements">
+        <div class="clash-el clash-el-a">
+          <span class="clash-el-side">${escapeHtml(t("results.colElementA"))}</span>
+          ${clashElementColumn(row.aType, row.aName, row.aFile, row.aStorey, row.aDiscipline)}
+        </div>
+        <div class="clash-vs" aria-hidden="true">↔</div>
+        <div class="clash-el clash-el-b">
+          <span class="clash-el-side">${escapeHtml(t("results.colElementB"))}</span>
+          ${clashElementColumn(row.bType, row.bName, row.bFile, row.bStorey, row.bDiscipline)}
+        </div>
+      </div>
+      ${clashDetailsHtml(row)}
+      <footer class="clash-card-actions">
+        <button type="button" class="clash-action" data-action="details" aria-expanded="false">${escapeHtml(t("results.viewDetails"))}</button>
+        <button type="button" class="clash-action" data-action="copy">${escapeHtml(t("results.copyRefs"))}</button>
+        ${canView3d ? `<button type="button" class="clash-action" data-action="view3d">${escapeHtml(t("viewer.open"))}</button>` : ""}
+      </footer>
+    </article>`;
+}
+
+// ------------------------------------------------------------------
+// Client-side instant filters over the already loaded rows. Backend filters
+// (storey, IFC type, project, file scope) still reload via Apply.
+// ------------------------------------------------------------------
+
+function matchesResultsSearch(row, query) {
+  const haystack = [
+    row.aName, row.aType, row.aGuid, row.aId, row.aFile, row.aDiscipline, row.aStorey,
+    row.bName, row.bType, row.bGuid, row.bId, row.bFile, row.bDiscipline, row.bStorey,
+  ].join("\n").toLowerCase();
+  return haystack.includes(query);
+}
+
+function computeVisibleResults() {
+  const query = (resultsSearchInput && resultsSearchInput.value || "").trim().toLowerCase();
+  const model = sourceModelFilter && sourceModelFilter.value || "";
+  const crossOnly = Boolean(crossFileFilterCheckbox && crossFileFilterCheckbox.checked);
+  const mode = resultsSortSelect && resultsSortSelect.value || "metric-desc";
+  let rows = lastResultsRows;
+  if (model) rows = rows.filter((r) => r.aFile === model || r.bFile === model);
+  if (crossOnly) rows = rows.filter((r) => r.crossFile);
+  if (query) rows = rows.filter((r) => matchesResultsSearch(r, query));
+  const byMetric = (a, b) => {
+    const av = a.metricValue === null ? -Infinity : a.metricValue;
+    const bv = b.metricValue === null ? -Infinity : b.metricValue;
+    return bv - av;
+  };
+  if (mode === "metric-asc") rows = [...rows].sort((a, b) => -byMetric(a, b));
+  else if (mode === "metric-desc") rows = [...rows].sort(byMetric);
+  else if (mode === "type") rows = [...rows].sort((a, b) => String(a.aType).localeCompare(String(b.aType)));
+  else if (mode === "source-file") rows = [...rows].sort((a, b) => String(a.aFile).localeCompare(String(b.aFile)));
+  return rows;
+}
+
+function populateSourceModelFilter() {
+  if (!sourceModelFilter) return;
+  const previous = sourceModelFilter.value;
+  const models = [...new Set(lastResultsRows.flatMap((r) => [r.aFile, r.bFile])
+    .filter((name) => name && name !== t("results.legacySource")))].sort();
+  sourceModelFilter.innerHTML = `<option value="" data-i18n="results.allModels">${escapeHtml(t("results.allModels"))}</option>`
+    + models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  if (models.includes(previous)) sourceModelFilter.value = previous;
+}
+
+function renderAllResults() {
+  visibleRowsCache = computeVisibleResults();
+  renderResultsCards();
+  renderTableRows();
+  updateResultsMeta();
+}
+
+function renderResultsCards() {
+  if (!resultsCards) return;
+  if (lastResultsRows.length === 0) return; // loading / error state owns the area
+  if (visibleRowsCache.length === 0) {
+    showResultsState("empty");
+    return;
+  }
+  resultsStatus.classList.add("hidden");
+  const page = visibleRowsCache.slice(0, resultsRenderCount);
+  resultsCards.innerHTML = page.map(clashCardHtml).join("");
+  if (loadMoreResultsBtn) {
+    loadMoreResultsBtn.classList.toggle("hidden", visibleRowsCache.length <= resultsRenderCount);
+  }
+}
+
+function updateResultsMeta() {
+  const total = visibleRowsCache.length;
+  if (resultsCount) {
+    resultsCount.textContent = lastResultsRows.length === 0
+      ? ""
+      : t("results.showingRange", {
+          shown: Math.min(resultsRenderCount, total),
+          total,
+        });
+  }
+  if (exportResultsBtn) exportResultsBtn.disabled = total === 0;
+}
+
+function renderTableRows() {
+  if (lastResultsRows.length === 0) {
     // data-i18n so the languagechange handler can re-render this row without
     // re-fetching (see the handler near the bottom of this file).
+    resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.loading">${escapeHtml(t("results.loading"))}</td></tr>`;
+    return;
+  }
+  if (visibleRowsCache.length === 0) {
     resultsBody.innerHTML = `<tr><td colspan="13" class="empty" data-i18n="results.noResults">${escapeHtml(t("results.noResults"))}</td></tr>`;
     return;
   }
-  resultsBody.innerHTML = rows
+  resultsBody.innerHTML = visibleRowsCache
     .map((r) => {
-      const aType = r.element_a_type ?? r.a_type ?? "";
-      const aName = r.element_a_name ?? r.a_name ?? "";
-      const aId = r.element_a_id ?? r.a_id ?? "";
-      const aGuid = r.element_a_guid ?? r.a_guid ?? "";
-      const aFile = r.element_a_source_file ?? r.a_source_ifc_file ?? t("results.legacySource");
-      const aDiscipline = r.element_a_discipline ?? r.a_discipline ?? t("pipeline.unspecified");
-      const bType = r.element_b_type ?? r.b_type ?? "";
-      const bName = r.element_b_name ?? r.b_name ?? "";
-      const bId = r.element_b_id ?? r.b_id ?? "";
-      const bGuid = r.element_b_guid ?? r.b_guid ?? "";
-      const bFile = r.element_b_source_file ?? r.b_source_ifc_file ?? t("results.legacySource");
-      const bDiscipline = r.element_b_discipline ?? r.b_discipline ?? t("pipeline.unspecified");
-      const crossFile = r.cross_file === true || r.relation_scope === "CROSS-FILE";
-      const relationLabel = crossFile ? t("results.crossFile") : t("results.intraFile");
+      const relationLabel = r.crossFile ? t("results.crossFile") : t("results.intraFile");
       return `
         <tr>
-          <td class="element-summary">${autoDir(`<strong>${escapeHtml(aType)}</strong>`)}<br>${autoDir(escapeHtml(aName))}</td>
-          <td><code class="provenance-id">${escapeHtml(aId)}</code></td>
-          <td><code class="provenance-id">${escapeHtml(aGuid)}</code></td>
-          <td class="source-file">${autoDir(escapeHtml(aFile))}</td>
-          <td>${autoDir(escapeHtml(aDiscipline))}</td>
-          <td class="element-summary">${autoDir(`<strong>${escapeHtml(bType)}</strong>`)}<br>${autoDir(escapeHtml(bName))}</td>
-          <td><code class="provenance-id">${escapeHtml(bId)}</code></td>
-          <td><code class="provenance-id">${escapeHtml(bGuid)}</code></td>
-          <td class="source-file">${autoDir(escapeHtml(bFile))}</td>
-          <td>${autoDir(escapeHtml(bDiscipline))}</td>
-          <td><span class="file-status relation-scope ${crossFile ? "cross-file" : "intra-file"}">${escapeHtml(relationLabel)}</span></td>
-          <td>${escapeHtml(r.issue ?? "")}</td>
-          <td class="num">${r.metric !== undefined && r.metric !== null ? Number(r.metric).toFixed(4) : ""}</td>
+          <td class="element-summary">${autoDir(`<strong>${escapeHtml(r.aType)}</strong>`)}<br>${autoDir(escapeHtml(r.aName))}</td>
+          <td><code class="provenance-id">${escapeHtml(r.aId)}</code></td>
+          <td><code class="provenance-id">${escapeHtml(r.aGuid)}</code></td>
+          <td class="source-file">${autoDir(escapeHtml(r.aFile))}</td>
+          <td>${autoDir(escapeHtml(r.aDiscipline))}</td>
+          <td class="element-summary">${autoDir(`<strong>${escapeHtml(r.bType)}</strong>`)}<br>${autoDir(escapeHtml(r.bName))}</td>
+          <td><code class="provenance-id">${escapeHtml(r.bId)}</code></td>
+          <td><code class="provenance-id">${escapeHtml(r.bGuid)}</code></td>
+          <td class="source-file">${autoDir(escapeHtml(r.bFile))}</td>
+          <td>${autoDir(escapeHtml(r.bDiscipline))}</td>
+          <td><span class="file-status relation-scope ${r.crossFile ? "cross-file" : "intra-file"}">${escapeHtml(relationLabel)}</span></td>
+          <td>${issueBadgeHtml(r.issue)}</td>
+          <td class="num">${r.metric}</td>
         </tr>`;
     })
     .join("");
+}
+
+// ------------------------------------------------------------------
+// Clash card actions: details, copy, and 3D pair view (delegated, so a
+// re-render never needs to rebind listeners).
+// ------------------------------------------------------------------
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    // Clipboard API needs a secure context; fall back for plain HTTP deploys.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "absolute";
+    area.style.insetInlineStart = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+function clashCopyText(row) {
+  const lines = [
+    `${t("results.colElementA")}: ${row.aType} — ${row.aName}`,
+    `${t("results.ifcGuid")}: ${row.aGuid}`,
+    `${t("results.elementId")}: ${row.aId}`,
+    `${t("results.sourceFile")}: ${row.aFile}`,
+    `${t("results.colElementB")}: ${row.bType} — ${row.bName}`,
+    `${t("results.ifcGuid")}: ${row.bGuid}`,
+    `${t("results.elementId")}: ${row.bId}`,
+    `${t("results.sourceFile")}: ${row.bFile}`,
+    `${t("results.colIssue")}: ${row.issue}`,
+    `${t("results.colMetric")}: ${row.metric}`,
+    `${t("results.projectLabel")}: ${row.projectId}`,
+    `${t("results.relation")}: ${row.crossFile ? "CROSS-FILE" : "INTRA-FILE"}`,
+  ];
+  return lines.filter((line) => !line.endsWith(": ")).join("\n");
+}
+
+/**
+ * Point the existing viewer at one clash pair. Deterministic: the record
+ * already names both elements, so no harvesting or model involvement —
+ * just the pair's bounds, its storey scenes, and two highlights.
+ */
+async function showClashInViewer(row) {
+  if (!window.bimViewer) return;
+  window.bimViewer.attach(viewerCanvas);
+  openDrawer(viewerPanel, viewerToggle);
+
+  const projectId = row.projectId || viewerProjectId();
+  if (!projectId) {
+    setViewerFooter([t("viewer.unavailable")]);
+    return;
+  }
+
+  viewerPlaceholder.classList.remove("hidden");
+  viewerPlaceholder.textContent = t("viewer.loading");
+  setViewerFooter([]);
+
+  const highlight = [];
+  if (row.aGuid) highlight.push({ ifc_guid: row.aGuid, element_id: row.aId, name: row.aName, ifc_type: row.aType });
+  if (row.bGuid) highlight.push({ ifc_guid: row.bGuid, element_id: row.bId, name: row.bName, ifc_type: row.bType });
+  const fileIds = [row.aFileId, row.bFileId].filter(Boolean);
+
+  try {
+    const data = await fetchElementsByIds(projectId, [row.aGuid, row.bGuid], fileIds);
+    const allBounds = data.elements || [];
+    const sceneKeys = [...new Set(allBounds.map((item) => item.scene_key).filter(Boolean))];
+    const scenes = await fetchScenes(projectId, sceneKeys, fileIds);
+
+    const result = await window.bimViewer.show({
+      sceneUrls: scenes.map((scene) => scene.url),
+      highlight,
+      bounds: allBounds,
+    });
+    if (result.superseded) return;
+
+    viewerPlaceholder.classList.toggle("hidden", result.loaded > 0 || allBounds.length > 0);
+    viewerPlaceholder.textContent = t("viewer.empty");
+
+    const lines = [t("viewer.elements", { n: result.matched })];
+    const storeys = scenes.map((scene) => scene.storeyName).filter(Boolean);
+    if (storeys.length) lines.push(t("viewer.scenes", { names: storeys.join(" · ") }));
+    if (!result.loaded) lines.push(t("viewer.boxFallback"));
+    else if (!result.matched) lines.push(t("viewer.noMatch"));
+    setViewerFooter(lines);
+  } catch (error) {
+    viewerPlaceholder.classList.remove("hidden");
+    viewerPlaceholder.textContent = t("viewer.empty");
+    setViewerFooter([`${t("common.error")}: ${error.message || error}`]);
+  }
+}
+
+resultsCards.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  const card = button.closest(".clash-card");
+  if (!card) return;
+  const row = lastResultsRows.find((r) => r.uid === card.dataset.uid);
+  if (!row) return;
+
+  if (button.dataset.action === "details") {
+    const panel = card.querySelector(".clash-details");
+    const open = panel.toggleAttribute("hidden") === false;
+    button.setAttribute("aria-expanded", String(open));
+    button.textContent = open ? t("results.hideDetails") : t("results.viewDetails");
+  } else if (button.dataset.action === "copy") {
+    const ok = await copyTextToClipboard(clashCopyText(row));
+    if (ok) {
+      button.textContent = t("results.copied");
+      setTimeout(() => { button.textContent = t("results.copyRefs"); }, 1200);
+    }
+  } else if (button.dataset.action === "view3d") {
+    showClashInViewer(row);
+  }
+});
+
+// Instant controls: filter/sort the loaded rows and restart pagination.
+[
+  [resultsSearchInput, "input"],
+  [sourceModelFilter, "change"],
+  [resultsSortSelect, "change"],
+  [crossFileFilterCheckbox, "change"],
+].forEach(([element, eventName]) => {
+  if (!element) return;
+  element.addEventListener(eventName, () => {
+    resultsRenderCount = RESULTS_PAGE_SIZE;
+    renderAllResults();
+  });
+});
+
+if (loadMoreResultsBtn) {
+  loadMoreResultsBtn.addEventListener("click", () => {
+    resultsRenderCount += RESULTS_PAGE_SIZE;
+    renderResultsCards();
+    updateResultsMeta();
+  });
+}
+
+// Card view is the default review experience; the wide table stays available.
+function setResultsView(mode) {
+  if (!viewCardsBtn || !viewTableBtn) return;
+  viewCardsBtn.classList.toggle("active", mode === "cards");
+  viewTableBtn.classList.toggle("active", mode === "table");
+  viewCardsBtn.setAttribute("aria-pressed", String(mode === "cards"));
+  viewTableBtn.setAttribute("aria-pressed", String(mode === "table"));
+  resultsCardView.classList.toggle("hidden", mode !== "cards");
+  resultsTableWrap.classList.toggle("hidden", mode !== "table");
+  // Recompute the top-scrollbar size for the container that just appeared.
+  updateResultsTopScroll();
+}
+
+viewCardsBtn.addEventListener("click", () => setResultsView("cards"));
+viewTableBtn.addEventListener("click", () => setResultsView("table"));
+setResultsView("cards");
+
+// ------------------------------------------------------------------
+// CSV export of the visible Results table
+// ------------------------------------------------------------------
+// Exports exactly the rows on screen — same tab, storey/type filters, project,
+// and file scope. The UTF-8 BOM keeps Persian element names legible when the
+// file opens in Excel; RFC 4180 quoting handles commas, quotes, and newlines
+// inside element names.
+
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function exportResultsCsv() {
+  if (!visibleRowsCache.length) return;
+  const headers = [
+    `${t("results.colElementA")} — ${t("results.csv.type")}`,
+    `${t("results.colElementA")} — ${t("results.csv.name")}`,
+    `${t("results.colElementA")} — ${t("results.elementId")}`,
+    `${t("results.colElementA")} — ${t("results.ifcGuid")}`,
+    `${t("results.colElementA")} — ${t("results.sourceFile")}`,
+    `${t("results.colElementA")} — ${t("results.discipline")}`,
+    `${t("results.colElementA")} — ${t("results.storey")}`,
+    `${t("results.colElementB")} — ${t("results.csv.type")}`,
+    `${t("results.colElementB")} — ${t("results.csv.name")}`,
+    `${t("results.colElementB")} — ${t("results.elementId")}`,
+    `${t("results.colElementB")} — ${t("results.ifcGuid")}`,
+    `${t("results.colElementB")} — ${t("results.sourceFile")}`,
+    `${t("results.colElementB")} — ${t("results.discipline")}`,
+    `${t("results.colElementB")} — ${t("results.storey")}`,
+    t("results.relation"),
+    t("results.colIssue"),
+    t("results.colMetric"),
+    t("results.projectLabel"),
+    `${t("results.anomalyScore")} (A)`,
+    `${t("results.anomalyScore")} (B)`,
+    `${t("results.anomalyScore")} (Σ)`,
+  ];
+  const lines = [headers.map(csvCell).join(",")];
+  visibleRowsCache.forEach((r) => {
+    lines.push([
+      r.aType, r.aName, r.aId, r.aGuid, r.aFile, r.aDiscipline, r.aStorey,
+      r.bType, r.bName, r.bId, r.bGuid, r.bFile, r.bDiscipline, r.bStorey,
+      r.crossFile ? "CROSS-FILE" : "INTRA-FILE",
+      r.issue,
+      r.metricValue === null ? "" : r.metricValue,
+      r.projectId,
+      r.anomalyA ?? "",
+      r.anomalyB ?? "",
+      r.anomalyCombined ?? "",
+    ].map(csvCell).join(","));
+  });
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `clash-results-${activeTab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+if (exportResultsBtn) exportResultsBtn.addEventListener("click", exportResultsCsv);
+
+// ------------------------------------------------------------------
+// Synchronized top scrollbar for the Results table
+// ------------------------------------------------------------------
+// The table region keeps its native horizontal scrolling (and remains the
+// keyboard-accessible path, tabindex=0 + aria-label). This mirrors a second,
+// slim scrollbar above it, next to the header the user orients by. The spacer
+// div is sized to the table's real scroll width — no duplicated table, no
+// second header, no fixed widths — and a guard flag stops the two scroll
+// events from feeding back into each other.
+
+function updateResultsTopScroll() {
+  if (!resultsTableScroll || !resultsTopScroll || !resultsTopSpacer) return;
+  const table = resultsTableScroll.querySelector("table");
+  if (!table) return;
+  const overflowWidth = Math.max(table.scrollWidth, resultsTableScroll.scrollWidth);
+  const overflows = overflowWidth > resultsTableScroll.clientWidth + 1;
+  resultsTopScroll.classList.toggle("has-overflow", overflows);
+  resultsTopSpacer.style.width = `${overflowWidth}px`;
+  resultsTopScroll.scrollLeft = resultsTableScroll.scrollLeft;
+}
+
+let syncingResultsScroll = false;
+function mirrorResultsScroll(from, to) {
+  if (syncingResultsScroll) return;
+  syncingResultsScroll = true;
+  to.scrollLeft = from.scrollLeft;
+  syncingResultsScroll = false;
+}
+
+if (resultsTopScroll && resultsTableScroll) {
+  resultsTopScroll.addEventListener("scroll", () =>
+    mirrorResultsScroll(resultsTopScroll, resultsTableScroll));
+  resultsTableScroll.addEventListener("scroll", () =>
+    mirrorResultsScroll(resultsTableScroll, resultsTopScroll));
+  // Window resizes resize the container; data, filter, tab, and language
+  // changes resize the table itself. Observing both covers every trigger
+  // without each caller having to remember to update the spacer.
+  const resultsScrollObserver = new ResizeObserver(updateResultsTopScroll);
+  resultsScrollObserver.observe(resultsTableScroll);
+  const resultsTableEl = resultsTableScroll.querySelector("table");
+  if (resultsTableEl) resultsScrollObserver.observe(resultsTableEl);
 }
 
 // ------------------------------------------------------------------
@@ -1940,7 +2518,8 @@ if (applyBtn) {
     });
 }
 
-// Handle clicking "Clear" on the Results table filters
+// Handle clicking "Clear" on the Results filters: resets backend filters and
+// every instant client filter, then reloads.
 const clearFiltersBtn = document.getElementById('clearFiltersBtn');
 if (clearFiltersBtn) {
     clearFiltersBtn.addEventListener('click', () => {
@@ -1948,6 +2527,11 @@ if (clearFiltersBtn) {
         if (storeySelect) storeySelect.value = "";
 
         resultTypeDropdown.selectAll();
+
+        if (resultsSearchInput) resultsSearchInput.value = "";
+        if (sourceModelFilter) sourceModelFilter.value = "";
+        if (crossFileFilterCheckbox) crossFileFilterCheckbox.checked = false;
+        if (resultsSortSelect) resultsSortSelect.value = "metric-desc";
 
         currentStoreyFilter = "";
         currentTypesFilter = [];
@@ -1986,12 +2570,30 @@ document.addEventListener("languagechange", () => {
   const idle = log.querySelector(".log-muted");
   if (idle) idle.textContent = t("pipeline.logIdle");
 
-  // The results table: re-render only the placeholder row. Real rows contain
+  // The results table: re-render the placeholder row. Real rows contain
   // element names from the model, which are not translated, so reloading them
-  // would cost a request for no benefit.
+  // would cost a request for no benefit — but the card actions, badges, count
+  // line, and source-model "All models" option are UI strings, so loaded rows
+  // are re-rendered from memory (no fetch).
   const placeholder = resultsBody.querySelector("td.empty");
   if (placeholder && placeholder.hasAttribute("data-i18n")) {
     placeholder.textContent = t(placeholder.getAttribute("data-i18n"));
+  }
+  // The status strip: the empty message is a plain UI string; the error keeps
+  // the backend's detail text and re-translates only its prefix.
+  if (resultsStatus && !resultsStatus.classList.contains("hidden")) {
+    if (resultsStatus.classList.contains("is-empty")) {
+      resultsStatus.textContent = t("results.noResults");
+    } else if (resultsStatus.classList.contains("is-error")) {
+      const detail = lastResultsError ? lastResultsError.split(": ").slice(1).join(": ") : "";
+      resultsStatus.textContent = detail ? `${t("results.loadError")}: ${detail}` : t("results.loadError");
+    }
+  }
+  if (lastResultsRows.length) {
+    populateSourceModelFilter();
+    renderAllResults();
+  } else {
+    updateResultsMeta();
   }
 
   // Viewer buttons on past messages: relabel from the state stored on each

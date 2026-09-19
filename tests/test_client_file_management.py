@@ -290,10 +290,109 @@ def test_frontend_file_management_provenance_scroll_menu_and_localization_contra
     assert '"nav.corpus": "اسناد PDF"' in translations
     assert '"results.intraFile": "INTRA-FILE"' in translations
     assert '"results.intraFile": "درون‌فایلی"' in translations
-    assert '/static/style.css?v=14' in html
-    assert '/static/i18n.js?v=7' in html
+    assert '/static/style.css?v=16' in html
+    assert '/static/i18n.js?v=9' in html
     assert '/static/viewer.js?v=2' in html
-    assert '/static/app.js?v=15' in html
+    assert '/static/app.js?v=17' in html
+
+
+def test_viewer_rename_documents_toolbar_and_results_export_scroll_contract():
+    """UI contract for the client refinements: 3D Visualization naming, the
+    simplified Documents toolbar, and the Results CSV export + top scrollbar."""
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    javascript = Path("static/app.js").read_text(encoding="utf-8")
+    css = Path("static/style.css").read_text(encoding="utf-8")
+    translations = Path("static/i18n.js").read_text(encoding="utf-8")
+    routes_src = Path("api/routes.py").read_text(encoding="utf-8")
+
+    # 3D Visualization entry point: renamed everywhere user-visible, cube icon,
+    # labelled trigger with aria-label, and no "3D map" left in the markup.
+    assert 'class="rail-toggle viewer-toggle"' in html
+    assert 'title="3D Visualization"' in html
+    assert 'aria-label="3D Visualization"' in html
+    assert 'data-i18n-title="viewer.title"' in html
+    assert 'data-i18n-aria-label="viewer.title"' in html
+    assert '<h3 data-i18n="viewer.title">3D Visualization</h3>' in html
+    # Feather "box" (cube) glyph — distinct from the Pipeline layers icon.
+    assert 'd="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8' in html
+    assert 'title="3D map"' not in html
+    assert '3D map' not in html
+    assert '"viewer.title": "3D Visualization"' in translations
+    assert '"viewer.title": "نمایش سه‌بعدی"' in translations
+
+    # Documents toolbar: Select All + Delete Selected remain; Refresh and
+    # Clear All are gone from the UI, and their handlers left app.js. The
+    # backend /rag/clear endpoint is retained for compatibility.
+    assert 'id="corpus-select-all"' in html and 'id="delete-corpus-selected-btn"' in html
+    assert 'id="refresh-corpus-btn"' not in html
+    assert 'id="clear-corpus-btn"' not in html
+    assert 'clearCorpusBtn' not in javascript and 'refreshCorpusBtn' not in javascript
+    assert "/api/rag/clear" not in javascript
+    assert '@router.delete("/rag/clear")' in routes_src
+    assert 'panel-header-actions file-management-actions' in html
+    # The list still reloads itself on the automatic paths.
+    assert 'async function loadCorpusStatus()' in javascript
+    assert 'if (activeNav === "corpus") loadCorpusStatus();' in javascript
+
+    # Results: synchronized top scrollbar above the table.
+    assert 'id="results-top-scroll"' in html
+    assert 'id="results-top-scroll-spacer"' in html
+    assert 'aria-hidden="true"' in html
+    assert 'function updateResultsTopScroll()' in javascript
+    assert 'mirrorResultsScroll' in javascript
+    assert 'new ResizeObserver(updateResultsTopScroll)' in javascript
+    assert '.results-top-scroll.has-overflow' in css
+    assert 'scrollbar-gutter: stable' in css
+    assert 'html[dir="rtl"] .results-top-scroll { direction: rtl; }' in css
+
+    # Results: CSV export of the currently visible rows.
+    assert 'id="export-results-btn"' in html
+    assert 'data-i18n="results.exportCsv"' in html
+    assert 'function exportResultsCsv()' in javascript
+    assert 'exportResultsBtn.disabled = total === 0' in javascript
+    assert '"\\uFEFF"' in javascript  # UTF-8 BOM for Excel + Persian names
+    assert '"results.exportCsv": "Export CSV"' in translations
+    assert '"results.exportCsv": "خروجی CSV"' in translations
+    assert '"results.csv.type"' in translations and '"results.csv.name"' in translations
+
+    # Results: readability refinements (count line, issue badges, sticky column).
+    assert 'id="results-count"' in html and 'aria-live="polite"' in html
+    assert 'function issueBadgeHtml(' in javascript
+    assert '"results.count"' in translations
+    assert '"results.issueClash"' in translations and '"results.issueClearance"' in translations
+    assert '.issue-badge' in css and '.issue-badge.issue-clash' in css
+    assert '.results-table tbody tr:hover td' in css
+    assert '.results-table thead th:first-child,\n.results-table tbody td:first-child' in css
+    assert 'max-height: min(70vh, 820px)' in css
+
+    # Clash review cards are the primary view; the wide table remains optional.
+    assert 'id="results-card-view"' in html and 'id="results-cards"' in html
+    assert 'id="results-table-wrap"' in html
+    assert 'getElementById("results-table-wrap")' in javascript
+    assert 'id="view-cards-btn"' in html and 'id="view-table-btn"' in html
+    assert 'function setResultsView(' in javascript and 'setResultsView("cards")' in javascript
+    assert 'function clashCardHtml(' in javascript
+    assert 'function clashDetailsHtml(' in javascript
+    assert 'data-action="details"' in javascript and 'data-action="copy"' in javascript
+    assert 'data-action="view3d"' in javascript
+    assert 'function showClashInViewer(' in javascript
+    assert '"/api/model/elements/by-guid"' in javascript
+    assert '"/model/elements/by-guid"' in routes_src
+    assert 'RESULTS_PAGE_SIZE = 50' in javascript
+    assert 'id="load-more-results-btn"' in html
+    assert 'id="results-status"' in html and 'results-skeleton' in css
+    assert '"results.loadError"' in translations and '"results.noResults"' in translations
+    # Instant client filters over the loaded rows.
+    assert 'id="results-search"' in html and 'id="source-model-filter"' in html
+    assert 'id="results-sort"' in html and 'id="cross-file-filter"' in html
+    assert 'function computeVisibleResults(' in javascript
+    assert '"results.showingRange"' in translations
+    # The results Refresh button is gone; loading happens on tab open, tab
+    # switch, Apply, and pipeline completion.
+    assert 'id="refresh-results-btn"' not in html
+    assert 'refreshResultsBtn' not in javascript
+    # Export CSV carries the full technical data including storey columns.
+    assert 'r.aStorey' in javascript and 'r.bStorey' in javascript
 
 
 def test_openapi_exposes_bulk_delete_contracts():

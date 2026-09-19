@@ -153,13 +153,13 @@ The integrated UI is implemented in `templates/index.html`, `static/style.css`, 
 
 The application has five views:
 
-- **Chat:** hybrid graph/regulation questions, example questions, stronger-model mode, source tags, and retrieval diagnostics.
+- **Chat:** hybrid graph/regulation questions, example questions, stronger-model mode, source tags, and retrieval diagnostics. A labelled **3D Visualization** header action (cube icon) and per-answer buttons open the viewer drawer for the elements an answer identified.
 - **Pipeline:** project ID, multi-IFC upload, registered-model selection, storey/type filtering, graph reset option, ingestion, analysis, and activity logging.
-- **Results:** All Issues, Clashes, and Clearances with graph-derived filters and project context.
+- **Results:** All Issues, Clashes, and Clearances with graph-derived filters and project context. A result count, issue badges, row hover, and a pinned first column aid scanning; a synchronized scrollbar above the table mirrors the table's horizontal scroll, and **Export CSV** downloads the currently displayed rows (with filters and scope applied) as UTF-8 CSV.
 - **Sustainability:** exact project/IFC scope, embodied-carbon KPIs, breakdowns, top contributors, data-quality exclusions, grounded session LEED findings, and report downloads.
-- **Documents:** multi-PDF upload, optional single-document ID, document domain/standard/version classification, stored-document inventory, and collection clearing.
+- **Documents:** multi-PDF upload, optional single-document ID, document domain/standard/version classification, and a stored-document inventory with Select All + Delete Selected bulk removal. The list refreshes automatically after upload, deletion, and language changes; there are no manual Refresh or Clear All controls.
 
-Navigation is an overlay drawer. Chat analysis context is a separate drawer. A shared scrim, close controls, responsive breakpoints, and `Escape` handling keep both drawers usable on desktop and mobile.
+Navigation is an overlay drawer. Chat analysis context and the 3D Visualization are separate drawers. A shared scrim, close controls, responsive breakpoints, and `Escape` handling keep all drawers usable on desktop and mobile.
 
 ### 3.2 English/Persian support
 
