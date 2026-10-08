@@ -7,6 +7,8 @@
 
 BIM-Intellect is a web application for asking evidence-backed questions about building regulations and BIM models. It combines a multilingual document RAG pipeline with an IFC-derived Neo4j graph, allowing one question to retrieve clause-level PDF evidence, inspect project elements and clashes, and return a grounded answer with traceable citations. The same project workspace also supports multi-file IFC ingestion, scoped clash analysis, answer-linked 3D visualization, and deterministic embodied-carbon reporting.
 
+![App tour](docs/assets/demo-tabs.gif)
+
 ## RAG architecture
 
 The RAG system is the core of the application. It treats regulatory documents as structured evidence rather than undifferentiated text, then routes each question to the document index, building graph, sustainability results, or an appropriate combination.
